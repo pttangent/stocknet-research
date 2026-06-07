@@ -10,6 +10,12 @@ import networkx as nx
 import numpy as np
 import pandas as pd
 
+from stocknetwork.features import (
+    compute_intraday_features,
+    compute_residual_returns,
+    compute_rolling_volume_zscore,
+)
+
 
 NODE_FEATURE_NAMES = [
     "log_return",
@@ -56,27 +62,27 @@ def load_panel(parquet_root: Path, symbols: list[str]) -> pd.DataFrame:
 
 
 def compute_symbol_features(panel: pd.DataFrame, benchmark_symbol: str) -> pd.DataFrame:
-    frame = panel.copy()
-    frame["log_return"] = frame.groupby("symbol")["close"].transform(lambda s: np.log(s / s.shift(1)))
-    benchmark_returns = frame.loc[frame["symbol"] == benchmark_symbol, ["timestamp", "log_return"]].rename(
-        columns={"log_return": "benchmark_log_return"}
+    frame = compute_intraday_features(panel).copy()
+    close_df = panel.pivot(index="timestamp", columns="symbol", values="close").sort_index()
+    volume_df = panel.pivot(index="timestamp", columns="symbol", values="volume").sort_index()
+
+    residual_returns = compute_residual_returns(close_df)
+    volume_zscore = compute_rolling_volume_zscore(volume_df)
+
+    residual_long = residual_returns.reset_index().melt(
+        id_vars="timestamp",
+        var_name="symbol",
+        value_name="residual_return",
     )
-    frame = frame.merge(benchmark_returns, on="timestamp", how="left")
-    frame["residual_return"] = frame["log_return"] - frame["benchmark_log_return"]
-    frame["intraday_range"] = (frame["high"] - frame["low"]) / frame["close"].replace(0, np.nan)
-    frame["rolling_volatility"] = frame.groupby("symbol")["log_return"].transform(
-        lambda s: s.rolling(window=5, min_periods=3).std(ddof=0)
+    volume_long = volume_zscore.reset_index().melt(
+        id_vars="timestamp",
+        var_name="symbol",
+        value_name="volume_zscore",
     )
-    frame["liquidity_score"] = np.log1p(frame["close"] * frame["volume"])
-    frame["volume_zscore"] = frame.groupby("symbol")["volume"].transform(_rolling_zscore)
+
+    frame = frame.merge(residual_long, on=["timestamp", "symbol"], how="left")
+    frame = frame.drop(columns=["volume_zscore"], errors="ignore").merge(volume_long, on=["timestamp", "symbol"], how="left")
     return frame
-
-
-def _rolling_zscore(series: pd.Series, window: int = 5) -> pd.Series:
-    mean = series.rolling(window=window, min_periods=3).mean()
-    std = series.rolling(window=window, min_periods=3).std(ddof=0).replace(0, np.nan)
-    zscore = (series - mean) / std
-    return zscore.replace([np.inf, -np.inf], np.nan)
 
 
 def filter_adjacency(scores: np.ndarray, top_k: int, threshold: float) -> np.ndarray:

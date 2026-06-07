@@ -1,122 +1,171 @@
-# StockNet: 非預設動態題材發現與配置系統
+# StockNet
 
-基於 5m/15m/30m intraday bars 的金融網絡動量分析平台，從市場共同運動中自動發現新興板塊，並通過 Temporal GNN 預測社群演變。
+StockNet is an intraday market-network research system for discovering non-preset co-moving equity communities from U.S. `5m / 15m / 30m` bars and studying their persistence with graph-based models.
 
-## 核心能力
+The current project state is best described as a research-system prototype:
 
-| 能力 | 狀態 |
-|------|------|
-| 5m/15m/30m 多分辨率數據抓取 | ✅ |
-| GPU 加速相關計算 (PyTorch) | ✅ |
-| Bootstrap 共識社群偵測 | ✅ |
-| Null Model 顯著性驗證 | ✅ |
-| 市場中性 residual returns | ✅ |
-| Co-jump / Lead-lag 邊特徵 | ✅ |
-| Edge Persistence 基線 (Persistence/Logistic/XGBoost) | ✅ |
-| Snapshot TGNN (純 PyTorch GRU) | ✅ |
-| PyG Temporal GNN (GConvGRU/GConvLSTM) | ✅ |
-| Community Survival 預測 | ✅ |
-| Node Migration 預測 | ✅ |
-| Ablation Study 框架 | ✅ |
-| 回測強化 (現金閘門 + Volatility Targeting) | ✅ |
-| Dashboard (網絡圖 + 共識面板 + TGNN 預測) | ✅ |
-| 一鍵 Full Pipeline | ✅ |
+- strongest today: pipeline skeleton, 15m mainline, dashboard shell, edge-persistence TGNN prototype
+- in progress: honest multi-resolution integration, 5m-first resampling flow, shared feature wiring
+- not yet a final research conclusion engine: consensus/null rigor, lifecycle label reliability, emergence modeling
 
-## 快速開始
+## Status
 
-### 1. 啟動 Dashboard
+Use these labels literally:
+
+- `Implemented`: code exists and is part of a stable mainline
+- `Prototype`: code exists but still needs validation or deeper integration
+- `In Progress`: active architectural work is underway
+- `Not Yet Integrated`: an idea or side path exists, but not in the main workflow
+
+| Capability | Status | Notes |
+|---|---|---|
+| 5m parquet fetch | Implemented | Primary raw intraday source |
+| 15m / 30m parquet fetch | Prototype | Supported, but moving toward 5m-first derivation |
+| 5m -> 15m / 30m resampling flow | Implemented | Used by multi-resolution panel builder |
+| Single-resolution research pipeline | Implemented | Mainline still centered on one interval at a time |
+| Multi-resolution orchestration mode | In Progress | Explicit mode exists; validation depth still catching up |
+| Shared feature module | Implemented | Residual returns, time-of-day volume z-score, co-jump, lead-lag |
+| Graph snapshots using shared feature logic | Implemented | Snapshot features now route through `features.py` |
+| GPU-first graph construction | Prototype | CPU fallback is still common; not all steps are GPU-saturated |
+| Bootstrap consensus clustering | Prototype | Workflow exists, but probability accounting still needs tightening |
+| Null-model validation | Prototype | Framework exists; scoring still needs stronger research semantics |
+| Lifecycle / migration labels | Prototype | Current labels still need lifecycle-id-grade matching |
+| TGNN edge persistence | Implemented | Usable proof-of-concept and metrics path |
+| Edge emergence prediction | Not Yet Integrated | Separate task from persistence |
+| Community detail dashboard | In Progress | Global dashboard works; deeper community drilldown still missing |
+
+## Quick Start
+
+### Dashboard
 
 ```bash
 npm start
 ```
 
-訪問 http://localhost:3000
+Open [http://localhost:3000](http://localhost:3000).
 
-### 2. 一鍵 Full Pipeline
+### Single-Resolution Full Pipeline
+
+This is the current most reliable end-to-end path.
 
 ```bash
 npm run research:full-pipeline -- \
-  --input "/path/to/P123_Screen.csv" \
-  --output-root artifacts/full_run_$(date +%Y%m%d)
+  --mode single-resolution \
+  --interval 15m \
+  --input "D:/path/to/P123_Screen.csv" \
+  --output-root artifacts/full_run_15m
 ```
 
-### 3. 分步執行
+### Multi-Resolution Orchestration
+
+This mode now treats `5m` as the raw source and derives `15m` / `30m` from it for time-aligned analysis.
 
 ```bash
-# Phase 0: 多分辨率數據
-npm run research:build-multi-res -- --input ... --output-root artifacts/
-
-# Phase 1: 板塊分析 + curation
-npm run research:analyze-rotation -- --input ... --parquet-root artifacts/parquet_15m --output artifacts/research_rotation
-npm run research:curate-outputs -- --input-dir artifacts/research_rotation --output-dir artifacts/research_rotation_tuned
-
-# Phase 2: 共識分群 + Null 驗證
-npm run research:build-consensus -- --parquet-root artifacts/parquet_15m --output artifacts/consensus_clusters
-
-# Phase 3: Graph Snapshots + 特徵工程
-npm run research:build-snapshots -- --parquet-root artifacts/parquet_15m --output artifacts/graph_snapshots --compute-backend torch
-npm run research:build-labels -- --dataset-dir artifacts/graph_snapshots
-
-# Phase 4: 基線 + XGBoost + TGNN
-npm run research:edge-baselines -- --dataset-dir artifacts/graph_snapshots
-npm run research:train-xgboost -- --dataset-dir artifacts/graph_snapshots --output artifacts/graph_snapshots/xgboost
-npm run research:train-tgnn -- --dataset-dir artifacts/graph_snapshots --output artifacts/tgnn_snapshot --device cuda --epochs 20
-
-# Phase 5: 報告
-npm run research:model-comparison -- --output-dir artifacts/
-npm run research:build-report -- --output-dir artifacts/ --snapshot-dir artifacts/graph_snapshots --baseline-dir artifacts/graph_snapshots --tgnn-dir artifacts/tgnn_snapshot
+npm run research:full-pipeline -- \
+  --mode multi-resolution \
+  --input "D:/path/to/P123_Screen.csv" \
+  --output-root artifacts/full_run_multi
 ```
 
-## 技術架構
+## Pipeline Modes
 
-```
-Data Layer
-    ├── build_15m_parquet.py          (Yahoo 抓取, 支持 5m/15m/30m)
-    └── build_multi_resolution_panels.py
+### `single-resolution`
 
-Analysis Layer
-    ├── analyze_rotation.py           (Louvain + lifecycle tracking)
-    ├── curate_rotation_outputs.py    (Dashboard artifact 生成)
-    └── backtest_rotation_strategy.py (Rolling Ridge 回測)
+Best for a stable per-interval research run.
 
-GPU / Graph Layer
-    ├── gpu_graph.py                  (torch GPU corr + Leiden fallback)
-    ├── consensus_clustering.py       (Bootstrap 200次 consensus)
-    ├── null_models.py                (Time/Label/Sector null)
-    └── multi_resolution.py           (跨解析度 NMI + emergence)
+Flow:
 
-Feature Layer
-    ├── features.py                   (Residual returns, co-jump, lead-lag)
-    └── graph_snapshots.py            (Graph snapshot 生成)
+1. `build_15m_parquet.py --interval <interval>`
+2. `analyze_rotation.py`
+3. `curate_rotation_outputs.py`
+4. `build_graph_snapshots.py`
+5. `build_temporal_labels.py`
+6. `run_edge_baselines.py`
+7. `train_xgboost_baseline.py`
+8. `train_tgnn_snapshot.py`
+9. `build_model_comparison.py`
+10. `build_experiment_report.py`
 
-Model Layer
-    ├── baselines.py                  (Persistence/Logistic/Static GNN)
-    ├── xgboost_baseline.py           (XGBoost edge predictor)
-    ├── tgnn_snapshot.py              (純 PyTorch GRU TGNN)
-    └── tgnn_pyg.py                   (PyTorch Geometric GConvGRU)
+### `multi-resolution`
 
-Portfolio Layer
-    └── portfolio.py                  (現金閘門 + Vol Targeting + Sortino/Calmar)
+Best for aligned `5m / 15m / 30m` research artifacts.
 
-Dashboard Layer
-    ├── server.js                     (API server)
-    └── app.js                        (前端可視化)
-```
+Flow:
 
-## GPU 需求
+1. `build_multi_resolution_panels.py`
+   - fetch `5m`
+   - derive `15m` and `30m` from the 5m panel
+2. Per resolution (`5m`, `15m`, `30m`):
+   - `analyze_rotation.py`
+   - `curate_rotation_outputs.py`
+   - `build_consensus_clusters.py`
+   - `build_graph_snapshots.py`
+   - `build_temporal_labels.py`
+   - `run_edge_baselines.py`
+   - `train_tgnn_snapshot.py`
+3. `build_multi_resolution_report.py`
 
-- **必須**: NVIDIA GPU + CUDA (已測試 CUDA 12.8)
-- **PyTorch**: 2.12.0+ cu128
-- **PyTorch Geometric**: 2.8.0+
-- **leidenalg**: 0.11.0 (CPU Leiden fallback)
-- **cuGraph**: 可選，Windows 上建議用 leidenalg fallback
+What this mode does not yet claim:
 
-## 關鍵修正 (v0.2+)
+- it is not yet a fully validated emergence/survival/migration research stack
+- it does not yet make consensus/null metrics publication-grade by itself
+- it does not yet make lifecycle matching fully reliable
 
-1. **Volume z-score lookahead bias 已修復**: 從 `groupby.transform(mean)` 改為 rolling time-of-day z-score
-2. **Benchmark 自動注入**: SPY/QQQ/IWM/DIA 默認自動加入
-3. **Dashboard artifact 自動生成**: `curate_rotation_outputs.py` 橋接分析輸出和前端展示
+## Key Files
 
-## 許可
+### Data
 
-個人研究使用。Yahoo Finance 數據非官方接口，不適合生產環境。
+- `scripts/build_15m_parquet.py`
+- `scripts/build_multi_resolution_panels.py`
+
+### Features
+
+- `src/stocknetwork/features.py`
+
+### Network / Snapshots
+
+- `src/stocknetwork/gpu_graph.py`
+- `src/stocknetwork/graph_snapshots.py`
+- `src/stocknetwork/multi_resolution.py`
+
+### Research / Validation
+
+- `scripts/analyze_rotation.py`
+- `scripts/build_consensus_clusters.py`
+- `src/stocknetwork/consensus_clustering.py`
+- `src/stocknetwork/null_models.py`
+- `src/stocknetwork/temporal_labels.py`
+
+### Models
+
+- `src/stocknetwork/baselines.py`
+- `src/stocknetwork/xgboost_baseline.py`
+- `src/stocknetwork/tgnn_snapshot.py`
+- `src/stocknetwork/tgnn_pyg.py`
+
+### App / Dashboard
+
+- `server.js`
+- `public/app.js`
+- `public/index.html`
+
+## Current Research Caveats
+
+These are intentionally explicit:
+
+- `15m` remains the most mature mainline.
+- Consensus clustering still needs pairwise observation-count normalization.
+- Null-model scoring still needs better community-quality semantics than a simple persistence proxy.
+- Lifecycle/migration labels still need lifecycle-id-grade matching instead of relying on local community numbering.
+- TGNN currently proves edge persistence better than it proves edge emergence.
+
+## Practical Direction
+
+If you are extending this project, the highest-value next steps are:
+
+1. keep `5m` as the only raw intraday source
+2. derive `15m / 30m` from the same 5m panel
+3. make all graph construction consume the shared feature module
+4. tighten consensus probability accounting and null scoring
+5. build lifecycle-id-based community matching
+6. expose per-community drilldown in the dashboard

@@ -9,8 +9,11 @@ from __future__ import annotations
 import argparse
 import subprocess
 import sys
+import shutil
 from pathlib import Path
 from typing import Any
+
+import pandas as pd
 
 ROOT = Path(__file__).resolve().parents[1]
 SRC = ROOT / "src"
@@ -18,6 +21,7 @@ if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
 from stocknetwork.run_metadata import create_run_context
+from stocknetwork.multi_resolution import resample_5m_to_higher
 
 
 def parse_args() -> argparse.Namespace:
@@ -76,6 +80,114 @@ def run_build_parquet(
     }
 
 
+def write_resampled_interval(
+    source_dir: Path,
+    output_dir: Path,
+    target_interval: str,
+) -> dict[str, Any]:
+    """Build 15m/30m parquet output by resampling the already-built 5m dataset."""
+    manifest = pd.read_csv(source_dir / "_manifest.csv")
+    success_rows = manifest[manifest["status"] == "success"].copy()
+    failure_rows = manifest[manifest["status"] == "failed"].copy()
+
+    if output_dir.exists():
+        shutil.rmtree(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    manifest_records: list[dict[str, Any]] = []
+    success_records: list[dict[str, Any]] = []
+
+    for row in success_rows.to_dict("records"):
+        symbol = str(row["symbol"])
+        partition_path = source_dir / f"symbol={symbol}" / "part-000.parquet"
+        frame = pd.read_parquet(partition_path)
+        resampled = resample_5m_to_higher(frame, target_interval)
+        resampled = resampled.drop(columns=["interval"], errors="ignore")
+        for extra_col in ["source_symbol", "exchange_timezone", "fetch_date"]:
+            if extra_col in frame.columns and extra_col not in resampled.columns:
+                if extra_col == "source_symbol":
+                    resampled[extra_col] = str(row["source_symbol"])
+                elif extra_col == "exchange_timezone":
+                    non_null = frame[extra_col].dropna()
+                    resampled[extra_col] = non_null.iloc[0] if not non_null.empty else ""
+                elif extra_col == "fetch_date":
+                    resampled[extra_col] = pd.to_datetime(frame[extra_col], utc=True).max()
+
+        partition_dir = output_dir / f"symbol={symbol}"
+        partition_dir.mkdir(parents=True, exist_ok=True)
+        resampled.to_parquet(partition_dir / "part-000.parquet", index=False)
+
+        record = {
+            "source_symbol": row["source_symbol"],
+            "symbol": symbol,
+            "row_count": int(len(resampled)),
+            "min_timestamp": pd.to_datetime(resampled["timestamp"], utc=True).min(),
+            "max_timestamp": pd.to_datetime(resampled["timestamp"], utc=True).max(),
+            "exchange_timezone": str(resampled["exchange_timezone"].dropna().iloc[0]) if "exchange_timezone" in resampled.columns and resampled["exchange_timezone"].notna().any() else "",
+            "last_fetch_at": pd.to_datetime(resampled["fetch_date"], utc=True).max() if "fetch_date" in resampled.columns else pd.Timestamp.utcnow(),
+        }
+        success_records.append(record)
+        manifest_records.append({**record, "status": "success", "error_message": ""})
+
+    for row in failure_rows.to_dict("records"):
+        manifest_records.append(
+            {
+                "source_symbol": row.get("source_symbol", ""),
+                "symbol": row.get("symbol", ""),
+                "status": "failed",
+                "row_count": 0,
+                "min_timestamp": pd.NaT,
+                "max_timestamp": pd.NaT,
+                "exchange_timezone": "",
+                "last_fetch_at": row.get("last_fetch_at", ""),
+                "error_message": row.get("error_message", ""),
+            }
+        )
+
+    manifest_frame = pd.DataFrame(
+        manifest_records,
+        columns=[
+            "source_symbol",
+            "symbol",
+            "status",
+            "row_count",
+            "min_timestamp",
+            "max_timestamp",
+            "exchange_timezone",
+            "last_fetch_at",
+            "error_message",
+        ],
+    )
+    success_frame = pd.DataFrame(
+        success_records,
+        columns=[
+            "source_symbol",
+            "symbol",
+            "row_count",
+            "min_timestamp",
+            "max_timestamp",
+            "exchange_timezone",
+            "last_fetch_at",
+        ],
+    )
+    failure_frame = manifest_frame[manifest_frame["status"] == "failed"][
+        ["source_symbol", "symbol", "last_fetch_at", "error_message"]
+    ].copy()
+
+    manifest_frame.to_parquet(output_dir / "_manifest.parquet", index=False)
+    manifest_frame.to_csv(output_dir / "_manifest.csv", index=False)
+    success_frame.to_csv(output_dir / "_success.csv", index=False)
+    failure_frame.to_csv(output_dir / "_failed.csv", index=False)
+
+    return {
+        "interval": target_interval,
+        "output_dir": output_dir,
+        "returncode": 0,
+        "stdout": f"Resampled {len(success_records)} symbols from 5m into {target_interval}",
+        "stderr": "",
+    }
+
+
 def main() -> int:
     args = parse_args()
     input_path = Path(args.input).expanduser().resolve()
@@ -93,18 +205,43 @@ def main() -> int:
     )
     run_context.write_initial_metadata()
 
+    requested_intervals = list(dict.fromkeys(args.intervals))
+    needs_5m_source = any(interval in {"5m", "15m", "30m"} for interval in requested_intervals)
     results: list[dict[str, Any]] = []
-    for interval in args.intervals:
-        interval_dir = output_root / f"parquet_{interval}"
-        result = run_build_parquet(
+
+    built_5m_dir = output_root / "parquet_5m"
+    if needs_5m_source:
+        result_5m = run_build_parquet(
             input_path=input_path,
-            output_dir=interval_dir,
-            interval=interval,
+            output_dir=built_5m_dir,
+            interval="5m",
             lookback_days=args.lookback_days,
             workers=args.workers,
             extra_symbols=args.extra_symbols,
             limit=args.limit,
         )
+        results.append(result_5m)
+
+    for interval in requested_intervals:
+        interval_dir = output_root / f"parquet_{interval}"
+        if interval == "5m":
+            continue
+        if interval in {"15m", "30m"}:
+            result = write_resampled_interval(
+                source_dir=built_5m_dir,
+                output_dir=interval_dir,
+                target_interval=interval,
+            )
+        else:
+            result = run_build_parquet(
+                input_path=input_path,
+                output_dir=interval_dir,
+                interval=interval,
+                lookback_days=args.lookback_days,
+                workers=args.workers,
+                extra_symbols=args.extra_symbols,
+                limit=args.limit,
+            )
         results.append(result)
 
     success_count = sum(1 for r in results if r["returncode"] == 0)

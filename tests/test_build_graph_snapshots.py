@@ -7,6 +7,8 @@ import pickle
 import pandas as pd
 
 from stocknetwork.graph_snapshots import build_snapshot_dataset
+from stocknetwork.graph_snapshots import compute_symbol_features
+from stocknetwork.features import compute_residual_returns, compute_rolling_volume_zscore
 
 
 def _write_manifest(parquet_root: Path, symbols: list[str]) -> None:
@@ -141,3 +143,51 @@ def test_build_snapshot_dataset_raises_when_benchmark_missing(tmp_path):
         assert "Benchmark symbol SPY" in str(exc)
     else:
         raise AssertionError("Expected RuntimeError when benchmark is missing")
+
+
+def test_compute_symbol_features_uses_shared_feature_module_logic():
+    timestamps = []
+    for day in range(1, 13):
+        timestamps.extend(
+            [
+                datetime(2026, 6, day, 13, 30, tzinfo=UTC),
+                datetime(2026, 6, day, 13, 45, tzinfo=UTC),
+            ]
+        )
+
+    def _symbol_rows(symbol: str, closes: list[float], volumes: list[int]) -> pd.DataFrame:
+        return pd.DataFrame(
+            {
+                "timestamp": timestamps,
+                "symbol": [symbol] * len(timestamps),
+                "open": closes,
+                "high": [value + 1 for value in closes],
+                "low": [value - 1 for value in closes],
+                "close": closes,
+                "volume": volumes,
+            }
+        )
+
+    panel = pd.concat(
+        [
+            _symbol_rows("SPY", [100 + i for i in range(24)], [1000 + 5 * i for i in range(24)]),
+            _symbol_rows("QQQ", [200 + i for i in range(24)], [2000 + 5 * i for i in range(24)]),
+            _symbol_rows("IWM", [300 + i for i in range(24)], [3000 + 5 * i for i in range(24)]),
+            _symbol_rows(
+                "AAA",
+                [50 + i for i in range(24)],
+                [100, 500, 110, 520, 120, 540, 130, 560, 140, 580, 150, 600, 160, 620, 170, 640, 180, 660, 190, 680, 200, 700, 210, 720],
+            ),
+        ],
+        ignore_index=True,
+    )
+
+    features = compute_symbol_features(panel, benchmark_symbol="SPY")
+    close_df = panel.pivot(index="timestamp", columns="symbol", values="close").sort_index()
+    volume_df = panel.pivot(index="timestamp", columns="symbol", values="volume").sort_index()
+    expected_residuals = compute_residual_returns(close_df)
+    expected_volume_z = compute_rolling_volume_zscore(volume_df)
+
+    feature_row = features[(features["symbol"] == "AAA") & (features["timestamp"] == timestamps[-2])].iloc[0]
+    assert abs(feature_row["residual_return"] - expected_residuals.loc[timestamps[-2], "AAA"]) < 1e-9
+    assert abs(feature_row["volume_zscore"] - expected_volume_z.loc[timestamps[-2], "AAA"]) < 1e-9
