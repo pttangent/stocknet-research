@@ -1,0 +1,73 @@
+# Stocknetwork Experiment Report
+
+## Snapshot Dataset
+
+- snapshot count: `1536`
+- symbol count: `199`
+- compute backend: `torch`
+
+## Baselines
+
+| model | metric | value |
+| --- | --- | --- |
+| persistence | auc | 0.6115980847590953 |
+| persistence | average_precision | 0.8760899006865549 |
+| persistence | f1 | 0.8805228969379022 |
+| persistence | positive_rate | 0.8464409075082401 |
+| persistence | rows | 468139.0 |
+| edge_strength | auc | 0.6289523032479891 |
+| edge_strength | average_precision | 0.899253118848425 |
+| edge_strength | f1 | 0.6220453078919964 |
+| edge_strength | positive_rate | 0.4485697623996291 |
+| edge_strength | rows | 468139.0 |
+| logistic_regression | auc | 0.6824271242073265 |
+| logistic_regression | average_precision | 0.9134665280137316 |
+| logistic_regression | f1 | 0.9161145525356718 |
+| logistic_regression | positive_rate | 0.9987396905619912 |
+| logistic_regression | rows | 468139.0 |
+| static_graph_logistic | auc | 0.6908022681778679 |
+| static_graph_logistic | average_precision | 0.9168359624847624 |
+| static_graph_logistic | f1 | 0.9158588995818276 |
+| static_graph_logistic | positive_rate | 0.9967402844027096 |
+| static_graph_logistic | rows | 468139.0 |
+
+## TGNN
+
+- device: `cuda`
+- gpu enabled: `True`
+
+| model | metric | value |
+| --- | --- | --- |
+| tgnn_snapshot | auc | 0.7526933768625734 |
+| tgnn_snapshot | average_precision | 0.936367243407474 |
+| tgnn_snapshot | f1 | 0.9160387692103428 |
+| tgnn_snapshot | rows | 466671.0 |
+
+## Comparison
+
+| model | metric | value |
+| --- | --- | --- |
+| persistence | auc | 0.6115980847590953 |
+| persistence | average_precision | 0.8760899006865549 |
+| persistence | f1 | 0.8805228969379022 |
+| persistence | positive_rate | 0.8464409075082401 |
+| persistence | rows | 468139.0 |
+| edge_strength | auc | 0.6289523032479891 |
+| edge_strength | average_precision | 0.899253118848425 |
+| edge_strength | f1 | 0.6220453078919964 |
+| edge_strength | positive_rate | 0.4485697623996291 |
+| edge_strength | rows | 468139.0 |
+| logistic_regression | auc | 0.6824271242073265 |
+| logistic_regression | average_precision | 0.9134665280137316 |
+| logistic_regression | f1 | 0.9161145525356718 |
+| logistic_regression | positive_rate | 0.9987396905619912 |
+| logistic_regression | rows | 468139.0 |
+| static_graph_logistic | auc | 0.6908022681778679 |
+| static_graph_logistic | average_precision | 0.9168359624847624 |
+| static_graph_logistic | f1 | 0.9158588995818276 |
+| static_graph_logistic | positive_rate | 0.9967402844027096 |
+| static_graph_logistic | rows | 468139.0 |
+| tgnn_snapshot | auc | 0.7526933768625734 |
+| tgnn_snapshot | average_precision | 0.936367243407474 |
+| tgnn_snapshot | f1 | 0.9160387692103428 |
+| tgnn_snapshot | rows | 466671.0 |

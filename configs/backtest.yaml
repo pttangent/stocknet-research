@@ -1,0 +1,37 @@
+# Backtest configuration
+backtest:
+  # Training
+  train_days: 15
+  top_themes: 3
+  top_stocks_per_theme: 5
+
+  # Costs
+  cost_bps: 10.0  # Round-trip trading cost in basis points
+
+  # Position limits
+  max_weight_per_stock: 0.10
+  max_weight_per_theme: 0.20
+
+  # Cash gate / risk management
+  cash_gate:
+    enabled: true
+    benchmark_ma_window: 20
+    regime_threshold: 0.5
+    max_exposure_bull: 1.0
+    max_exposure_bear: 0.5
+
+  # Volatility targeting
+  volatility_targeting:
+    enabled: true
+    target_annual_volatility: 0.15
+    vol_window: 20
+
+  # Metrics
+  metrics:
+    - "total_return"
+    - "sharpe"
+    - "sortino"
+    - "calmar"
+    - "max_drawdown"
+    - "hit_rate"
+    - "avg_turnover"

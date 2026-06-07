@@ -1,0 +1,32 @@
+# Data layer configuration
+data:
+  # Primary interval for analysis: 5m, 15m, or 30m
+  primary_interval: "15m"
+
+  # Multi-resolution intervals to fetch
+  intervals:
+    - "5m"
+    - "15m"
+    - "30m"
+
+  # Lookback days for data fetching (Yahoo intraday limit: ~60 days)
+  lookback_days: 60
+
+  # Benchmark symbols (auto-injected)
+  benchmarks:
+    - "SPY"
+    - "QQQ"
+    - "IWM"
+    - "DIA"
+
+  # Universe filter
+  universe:
+    min_price: 2.0
+    min_market_cap_usd: 100_000_000
+    min_avg_volume: 300_000
+
+  # Data source
+  source: "yahoo_finance"
+  workers: 8
+  sleep_seconds: 0.35
+  timeout_seconds: 20.0

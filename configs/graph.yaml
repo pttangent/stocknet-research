@@ -1,0 +1,44 @@
+# Graph construction configuration
+graph:
+  # Rolling window size in trading days
+  window_days: 5
+
+  # Minimum bars required in window
+  min_window_bars: 80
+
+  # Edge construction
+  top_k: 10
+  edge_threshold: 0.15
+
+  # Composite edge weights
+  weights:
+    return_corr: 0.45
+    residual_corr: 0.35
+    volume_corr: 0.20
+    cojump: 0.0      # enabled in Phase 3
+    leadlag: 0.0     # enabled in Phase 3
+
+  # Community detection
+  community:
+    algorithm: "leiden"  # louvain | leiden
+    resolution: 1.0
+    min_community_size: 4
+    random_seed: 42
+
+  # Consensus clustering
+  consensus:
+    enabled: true
+    bootstrap_runs: 200
+    sample_frac_bars: 0.9
+    sample_frac_symbols: 0.95
+    weight_noise_std: 0.05
+    resolution_range: [0.8, 2.5]
+    min_confidence: 0.35
+
+  # Null models
+  null_models:
+    enabled: true
+    n_runs: 500
+    tests:
+      - "time_shuffle"
+      - "label_shuffle"

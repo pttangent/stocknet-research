@@ -1,0 +1,29 @@
+{
+  "name": "minute-kline-viewer",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "node server.js",
+    "research:build-parquet": "python scripts/build_15m_parquet.py",
+    "research:build-5m": "python scripts/build_15m_parquet.py --interval 5m",
+    "research:build-15m": "python scripts/build_15m_parquet.py --interval 15m",
+    "research:build-30m": "python scripts/build_15m_parquet.py --interval 30m",
+    "research:build-multi-res": "python scripts/build_multi_resolution_panels.py",
+    "research:analyze-rotation": "python scripts/analyze_rotation.py",
+    "research:curate-outputs": "python scripts/curate_rotation_outputs.py",
+    "research:backtest-rotation": "python scripts/backtest_rotation_strategy.py",
+    "research:build-snapshots": "python scripts/build_graph_snapshots.py",
+    "research:build-labels": "python scripts/build_temporal_labels.py",
+    "research:edge-baselines": "python scripts/run_edge_baselines.py",
+    "research:model-comparison": "python scripts/build_model_comparison.py",
+    "research:build-report": "python scripts/build_experiment_report.py",
+    "research:build-consensus": "python scripts/build_consensus_clusters.py",
+    "research:train-xgboost": "python scripts/train_xgboost_baseline.py",
+    "research:train-tgnn": "python scripts/train_tgnn_snapshot.py",
+    "research:train-community-tgnn": "python scripts/train_community_tgnn.py",
+    "research:train-migration-tgnn": "python scripts/train_migration_tgnn.py",
+    "research:ablation-study": "python scripts/run_ablation_study.py",
+    "research:full-pipeline": "python scripts/run_full_pipeline.py"
+  }
+}
