@@ -48,6 +48,7 @@ def build_temporal_labels(
     output_dir: Path | str,
     horizon: int = 1,
     survival_jaccard_threshold: float = 0.35,
+    edge_emergence_negative_ratio: float = 3.0,
 ) -> dict[str, int]:
     output_dir = Path(output_dir).expanduser().resolve()
     manifest = pd.read_csv(output_dir / "snapshot_manifest.csv")
@@ -56,7 +57,11 @@ def build_temporal_labels(
     community_tracks = _build_community_tracks(records, survival_jaccard_threshold=survival_jaccard_threshold)
 
     edge_rows = _build_edge_rows(records, horizon=horizon)
-    edge_emergence_rows = _build_edge_emergence_rows(records, horizon=horizon)
+    edge_emergence_rows = _build_edge_emergence_rows(
+        records,
+        horizon=horizon,
+        negative_ratio=edge_emergence_negative_ratio,
+    )
     node_rows, membership_timeline_rows = _build_node_rows(records, community_tracks, horizon=horizon)
     community_rows, lifecycle_rows, lifecycle_event_rows = _build_lifecycle_rows(
         community_tracks,
@@ -113,14 +118,34 @@ def _build_edge_rows(records: list[SnapshotRecord], horizon: int) -> list[dict[s
     return edge_rows
 
 
-def _build_edge_emergence_rows(records: list[SnapshotRecord], horizon: int) -> list[dict[str, Any]]:
+def _build_edge_emergence_rows(
+    records: list[SnapshotRecord],
+    horizon: int,
+    negative_ratio: float = 3.0,
+) -> list[dict[str, Any]]:
     emergence_rows: list[dict[str, Any]] = []
     for index, current in enumerate(records):
         future_index = index + horizon
         if future_index >= len(records):
             break
         future = records[future_index]
-        candidate_pairs = sorted(current.undirected_edges | future.undirected_edges)
+        positive_pairs = current.undirected_edges | future.undirected_edges
+        all_pairs = {
+            tuple(sorted((current.symbols[left_idx], current.symbols[right_idx])))
+            for left_idx in range(len(current.symbols))
+            for right_idx in range(left_idx + 1, len(current.symbols))
+        }
+        absent_pairs = sorted(all_pairs - positive_pairs)
+        emergence_positive_count = sum(
+            1
+            for symbol_left, symbol_right in positive_pairs
+            if (symbol_left, symbol_right) not in current.undirected_edges
+            and (symbol_left, symbol_right) in future.undirected_edges
+        )
+        negative_target = max(int(round(max(emergence_positive_count, 1) * max(negative_ratio, 1.0))), 1)
+        negative_count = min(len(absent_pairs), negative_target)
+        sampled_absent_pairs = absent_pairs[:negative_count]
+        candidate_pairs = sorted(positive_pairs | set(sampled_absent_pairs))
         for symbol_left, symbol_right in candidate_pairs:
             present_now = int((symbol_left, symbol_right) in current.undirected_edges)
             present_future = int((symbol_left, symbol_right) in future.undirected_edges)

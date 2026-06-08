@@ -24,6 +24,12 @@ def parse_args() -> argparse.Namespace:
         default=0.35,
         help="Minimum best-match Jaccard to mark a community as surviving.",
     )
+    parser.add_argument(
+        "--edge-emergence-negative-ratio",
+        type=float,
+        default=3.0,
+        help="Sampled absent/absent negative pairs per positive emergence example.",
+    )
     parser.add_argument("--run-id", default="", help="Optional explicit run identifier for metadata tracking.")
     parser.add_argument("--run-label", default="", help="Optional short label for this run.")
     parser.add_argument("--run-notes", default="", help="Optional notes for this run.")
@@ -49,9 +55,16 @@ def main() -> int:
         output_dir=dataset_dir,
         horizon=args.horizon,
         survival_jaccard_threshold=args.survival_jaccard_threshold,
+        edge_emergence_negative_ratio=args.edge_emergence_negative_ratio,
     )
 
-    run_context.write_validation({"horizon": args.horizon, "survival_jaccard_threshold": args.survival_jaccard_threshold})
+    run_context.write_validation(
+        {
+            "horizon": args.horizon,
+            "survival_jaccard_threshold": args.survival_jaccard_threshold,
+            "edge_emergence_negative_ratio": args.edge_emergence_negative_ratio,
+        }
+    )
     run_context.write_artifacts(
         {
             "edge_labels_csv": dataset_dir / "edge_labels.csv",

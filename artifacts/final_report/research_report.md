@@ -10,7 +10,7 @@
 
 - 15m parquet universe: `3808` symbols
 - graph snapshots: `1536` windows with `199` active nodes per snapshot
-- graph snapshot rows summary: `20` metrics rows, `1872556` baseline prediction rows
+- graph snapshot rows summary: `n/a` metrics rows, `n/a` baseline prediction rows
 - compute backend: `torch`
 
 ## Multi-Resolution Consistency
@@ -51,6 +51,11 @@
 - TGNN test rows: `60894.0000`
 - device: `cuda`
 
+### Edge Emergence Baseline
+
+- XGBoost AUC / AP / F1: `0.9345 / 0.5169 / 0.5741`
+- baseline test rows: `756787.0000`
+
 ## Baseline Comparison
 
 | model | metric | value |
@@ -86,6 +91,7 @@
 
 - The strongest completed result is the snapshot edge-persistence track, where TGNN beats the simpler baselines on AUC and average precision.
 - Community survival also shows strong proof-of-concept performance, while node migration remains weak and should still be treated as prototype-level.
+- Edge emergence now has a first formal baseline result, which makes emergence a measurable task rather than only a planned label.
 - Multi-resolution consistency is now backed by real 5m/15m/30m datasets and a generated consistency report rather than placeholder wiring.
 - Consensus clustering and null validation are operational and reported here, but the label-shuffle result remains a caution flag for research interpretation.
 

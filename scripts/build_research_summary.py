@@ -58,6 +58,9 @@ def build_report(artifacts_root: Path, output_path: Path) -> Path:
     tgnn_snapshot_dir = artifacts_root / "tgnn_snapshot_final"
     tgnn_community_dir = artifacts_root / "tgnn_community_final"
     tgnn_migration_dir = artifacts_root / "tgnn_migration_final"
+    edge_emergence_dir = artifacts_root / "edge_emergence_final_v2"
+    if not edge_emergence_dir.exists():
+        edge_emergence_dir = artifacts_root / "edge_emergence_final"
     backtest_path = artifacts_root / "backtest_comparison.md"
     experiment_report_path = final_report_dir / "experiment_report.md"
     rotation_dir = artifacts_root / "research_rotation"
@@ -77,6 +80,7 @@ def build_report(artifacts_root: Path, output_path: Path) -> Path:
     snapshot_metrics = read_csv(tgnn_snapshot_dir / "tgnn_metrics.csv")
     community_metrics = read_csv(tgnn_community_dir / "tgnn_pyg_metrics.csv")
     migration_metrics = read_csv(tgnn_migration_dir / "tgnn_pyg_metrics.csv")
+    emergence_metrics = read_csv(edge_emergence_dir / "xgboost_edge_emergence_metrics.csv")
     rotation_events = read_csv(rotation_dir / "rotation_events.csv")
     sector_summary = read_csv(rotation_dir / "sector_summary.csv")
     parquet_success = read_csv(artifacts_root / "parquet_15m" / "_success.csv")
@@ -140,6 +144,11 @@ def build_report(artifacts_root: Path, output_path: Path) -> Path:
         f"- TGNN test rows: `{metric_lookup(migration_metrics, 'rows')}`",
         f"- device: `{tgnn_migration_summary.get('device', 'n/a')}`",
         "",
+        "### Edge Emergence Baseline",
+        "",
+        f"- XGBoost AUC / AP / F1: `{metric_lookup(emergence_metrics, 'auc')} / {metric_lookup(emergence_metrics, 'average_precision')} / {metric_lookup(emergence_metrics, 'f1')}`",
+        f"- baseline test rows: `{metric_lookup(emergence_metrics, 'rows')}`",
+        "",
         "## Baseline Comparison",
         "",
     ]
@@ -169,6 +178,7 @@ def build_report(artifacts_root: Path, output_path: Path) -> Path:
             "",
             "- The strongest completed result is the snapshot edge-persistence track, where TGNN beats the simpler baselines on AUC and average precision.",
             "- Community survival also shows strong proof-of-concept performance, while node migration remains weak and should still be treated as prototype-level.",
+            "- Edge emergence now has a first formal baseline result, which makes emergence a measurable task rather than only a planned label.",
             "- Multi-resolution consistency is now backed by real 5m/15m/30m datasets and a generated consistency report rather than placeholder wiring.",
             "- Consensus clustering and null validation are operational and reported here, but the label-shuffle result remains a caution flag for research interpretation.",
             "",

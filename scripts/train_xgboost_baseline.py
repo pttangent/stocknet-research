@@ -12,13 +12,19 @@ if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
 from stocknetwork.run_metadata import create_run_context
-from stocknetwork.xgboost_baseline import train_xgboost_edge_persistence
+from stocknetwork.xgboost_baseline import train_xgboost_edge_emergence, train_xgboost_edge_persistence
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Train XGBoost baseline for edge persistence.")
+    parser = argparse.ArgumentParser(description="Train XGBoost baseline for graph prediction tasks.")
     parser.add_argument("--dataset-dir", required=True, help="Dataset directory with snapshots and labels.")
     parser.add_argument("--output", required=True, help="Output directory for model and metrics.")
+    parser.add_argument(
+        "--label-type",
+        default="edge",
+        choices=["edge", "edge_emergence"],
+        help="Prediction target. 'edge' = persistence, 'edge_emergence' = future new-edge formation.",
+    )
     parser.add_argument("--train-fraction", type=float, default=0.6, help="Chronological train fraction.")
     parser.add_argument("--validation-fraction", type=float, default=0.2, help="Chronological validation fraction.")
     parser.add_argument("--run-id", default="", help="Optional explicit run identifier.")
@@ -44,12 +50,22 @@ def main() -> int:
     )
     run_context.write_initial_metadata()
 
-    result = train_xgboost_edge_persistence(
-        dataset_dir=dataset_dir,
-        output_dir=output_dir,
-        train_fraction=args.train_fraction,
-        validation_fraction=args.validation_fraction,
-    )
+    if args.label_type == "edge":
+        result = train_xgboost_edge_persistence(
+            dataset_dir=dataset_dir,
+            output_dir=output_dir,
+            train_fraction=args.train_fraction,
+            validation_fraction=args.validation_fraction,
+        )
+        output_prefix = "xgboost_edge"
+    else:
+        result = train_xgboost_edge_emergence(
+            dataset_dir=dataset_dir,
+            output_dir=output_dir,
+            train_fraction=args.train_fraction,
+            validation_fraction=args.validation_fraction,
+        )
+        output_prefix = "xgboost_edge_emergence"
 
     if "error" in result:
         print(f"Error: {result['error']}", file=sys.stderr)
@@ -57,15 +73,16 @@ def main() -> int:
         return 1
 
     run_context.write_validation({
+        "label_type": args.label_type,
         "auc": result["metrics"].get("auc", 0.0),
         "average_precision": result["metrics"].get("average_precision", 0.0),
         "feature_count": result["feature_count"],
     })
     run_context.write_artifacts({
-        "metrics_csv": output_dir / "xgboost_edge_metrics.csv",
-        "predictions_csv": output_dir / "xgboost_edge_predictions.csv",
-        "importance_csv": output_dir / "xgboost_edge_importance.csv",
-        "model_json": output_dir / "xgboost_edge_model.json",
+        "metrics_csv": output_dir / f"{output_prefix}_metrics.csv",
+        "predictions_csv": output_dir / f"{output_prefix}_predictions.csv",
+        "importance_csv": output_dir / f"{output_prefix}_importance.csv",
+        "model_json": output_dir / f"{output_prefix}_model.json",
     })
     run_context.write_summary({"status": "completed", **result})
     print(f"XGBoost baseline complete: {result}")

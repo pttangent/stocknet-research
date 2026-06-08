@@ -120,6 +120,14 @@ def test_build_temporal_labels_writes_all_target_tables(tmp_path):
     assert int(bbb_ccc_emergence["present_now"]) == 0
     assert int(bbb_ccc_emergence["present_future"]) == 1
     assert int(bbb_ccc_emergence["emerges"]) == 1
+    aaa_ccc_negative = edge_emergence_labels[
+        (edge_emergence_labels["snapshot_id"] == "snapshot_0000")
+        & (edge_emergence_labels["symbol_left"] == "AAA")
+        & (edge_emergence_labels["symbol_right"] == "CCC")
+    ].iloc[0]
+    assert int(aaa_ccc_negative["present_now"]) == 0
+    assert int(aaa_ccc_negative["present_future"]) == 0
+    assert int(aaa_ccc_negative["emerges"]) == 0
 
     bbb = node_labels[node_labels["symbol"] == "BBB"].iloc[0]
     assert bbb["migration_label"] == "migrate"
