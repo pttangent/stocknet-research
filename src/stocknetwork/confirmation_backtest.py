@@ -95,7 +95,7 @@ def load_daily_close(parquet_root: Path | str) -> pd.DataFrame:
     return daily_close
 
 
-def prepare_theme_panel(rotation_dir: Path | str) -> pd.DataFrame:
+def prepare_theme_panel(rotation_dir: Path | str, signal_mode: str = "causal") -> pd.DataFrame:
     rotation_dir = Path(rotation_dir).expanduser().resolve()
     frame = pd.read_csv(rotation_dir / "community_timeseries.csv")
     frame["timestamp"] = pd.to_datetime(frame["timestamp"], utc=True)
@@ -104,6 +104,8 @@ def prepare_theme_panel(rotation_dir: Path | str) -> pd.DataFrame:
     frame = frame.groupby(["trade_date", "lifecycle_id"], as_index=False).tail(1).reset_index(drop=True)
     frame["members_list"] = frame["members"].fillna("").astype(str).str.split(",")
     frame["members_list"] = frame["members_list"].apply(lambda items: [item for item in items if item])
+
+    frame = _normalize_signal_columns(frame, signal_mode=signal_mode)
 
     frame = _add_daily_cross_sectional_scores(frame)
     frame = _assign_theme_paths(frame)
@@ -117,6 +119,124 @@ def prepare_theme_panel(rotation_dir: Path | str) -> pd.DataFrame:
     return frame
 
 
+def _normalize_signal_columns(frame: pd.DataFrame, signal_mode: str) -> pd.DataFrame:
+    output = frame.copy()
+    if signal_mode not in {"causal", "full_info"}:
+        raise ValueError(f"Unsupported signal_mode: {signal_mode}")
+
+    if signal_mode == "causal":
+        output = _derive_causal_columns(output)
+        if "observed_member_outflow" not in output.columns and "member_count_delta" in output.columns:
+            output["observed_member_outflow"] = (-output["member_count_delta"]).clip(lower=0.0)
+        required = {
+            "stage": "observable_stage",
+            "rotation_in_score": "causal_rotation_in_score",
+            "rotation_out_score": "causal_rotation_out_score",
+            "edge_birth_rate": "observed_edge_birth_rate",
+            "edge_death_rate": "observed_edge_death_rate",
+            "member_outflow": "observed_member_outflow",
+        }
+    else:
+        required = {
+            "stage": "stage",
+            "rotation_in_score": "rotation_in_score",
+            "rotation_out_score": "rotation_out_score",
+            "edge_birth_rate": "edge_birth_rate",
+            "edge_death_rate": "edge_death_rate",
+            "member_outflow": "member_outflow",
+        }
+
+    for target, source in required.items():
+        if source not in output.columns:
+            raise KeyError(f"Missing required column for {signal_mode} mode: {source}")
+        output[target] = output[source]
+
+    output["signal_mode"] = signal_mode
+    return output
+
+
+def _derive_causal_columns(frame: pd.DataFrame) -> pd.DataFrame:
+    output = frame.copy()
+    output = output.sort_values(["lifecycle_id", "timestamp"]).reset_index(drop=True)
+    for column in ["member_count", "breadth", "coherence", "relative_return", "internal_edge_count"]:
+        delta_name = f"{column}_delta"
+        if delta_name not in output.columns and column in output.columns:
+            output[delta_name] = output.groupby("lifecycle_id")[column].diff().fillna(0.0)
+
+    if "observed_edge_birth_count" not in output.columns and "internal_edge_count_delta" in output.columns:
+        output["observed_edge_birth_count"] = output["internal_edge_count_delta"].clip(lower=0.0)
+    if "observed_edge_death_count" not in output.columns and "internal_edge_count_delta" in output.columns:
+        output["observed_edge_death_count"] = (-output["internal_edge_count_delta"]).clip(lower=0.0)
+
+    possible_pairs = (output["member_count"] * (output["member_count"] - 1) / 2).clip(lower=1.0)
+    if "observed_edge_birth_rate" not in output.columns and "observed_edge_birth_count" in output.columns:
+        output["observed_edge_birth_rate"] = output["observed_edge_birth_count"] / possible_pairs
+    if "observed_edge_death_rate" not in output.columns and "observed_edge_death_count" in output.columns:
+        output["observed_edge_death_rate"] = output["observed_edge_death_count"] / possible_pairs
+    if "observed_member_outflow" not in output.columns and "member_count_delta" in output.columns:
+        output["observed_member_outflow"] = (-output["member_count_delta"]).clip(lower=0.0)
+    if "observable_stage" not in output.columns:
+        output["observable_stage"] = output.apply(_observable_stage, axis=1)
+    if "causal_rotation_in_score" not in output.columns or "causal_rotation_out_score" not in output.columns:
+        output = _add_causal_rotation_scores(output)
+    return output
+
+
+def _add_causal_rotation_scores(frame: pd.DataFrame) -> pd.DataFrame:
+    output = frame.copy()
+    for timestamp, group in output.groupby("timestamp"):
+        idx = group.index
+        rel_z = _zscore(group["relative_return"])
+        vol_z = _zscore(group["volume_expansion"])
+        breadth_delta_z = _zscore(group["breadth_delta"])
+        coherence_delta_z = _zscore(group["coherence_delta"])
+        member_count_delta_z = _zscore(group["member_count_delta"])
+        edge_birth_obs_z = _zscore(group["observed_edge_birth_rate"])
+        edge_death_obs_z = _zscore(group["observed_edge_death_rate"])
+        support_z = _zscore(group["cross_resolution_support"])
+        output.loc[idx, "causal_rotation_in_score"] = (
+            0.20 * rel_z
+            + 0.20 * vol_z
+            + 0.20 * breadth_delta_z
+            + 0.15 * coherence_delta_z
+            + 0.15 * member_count_delta_z
+            + 0.10 * edge_birth_obs_z
+            + 0.05 * support_z
+        )
+        output.loc[idx, "causal_rotation_out_score"] = (
+            0.25 * _zscore(-group["relative_return"])
+            + 0.20 * _zscore(-group["coherence_delta"])
+            + 0.20 * _zscore(-group["breadth_delta"])
+            + 0.20 * _zscore(-group["member_count_delta"])
+            + 0.15 * edge_death_obs_z
+        )
+    return output
+
+
+def _observable_stage(row: pd.Series) -> str:
+    stage = str(row.get("stage", "")).lower()
+    age = int(row.get("age", 0))
+    member_delta = float(row.get("member_count_delta", 0.0))
+    breadth_delta = float(row.get("breadth_delta", 0.0))
+    coherence_delta = float(row.get("coherence_delta", 0.0))
+    if stage == "birth" or age <= 1:
+        return "birth"
+    if member_delta > 0 or (breadth_delta > 0 and coherence_delta >= 0):
+        return "expansion"
+    if member_delta < 0 or breadth_delta < 0 or coherence_delta < 0:
+        return "decay"
+    if age <= 2:
+        return "confirmation"
+    return "maturity"
+
+
+def _zscore(series: pd.Series) -> pd.Series:
+    std = float(series.std(ddof=0))
+    if math.isclose(std, 0.0) or math.isnan(std):
+        return pd.Series(0.0, index=series.index)
+    return (series - float(series.mean())) / std
+
+
 def run_confirmation_backtest(
     parquet_root: Path | str,
     rotation_dir: Path | str,
@@ -124,6 +244,7 @@ def run_confirmation_backtest(
     benchmark_symbol: str = "SPY",
     top_themes: int = 3,
     transaction_cost_bps: float = 10.0,
+    signal_mode: str = "causal",
 ) -> dict[str, Any]:
     parquet_root = Path(parquet_root).expanduser().resolve()
     rotation_dir = Path(rotation_dir).expanduser().resolve()
@@ -132,7 +253,7 @@ def run_confirmation_backtest(
 
     daily_close = load_daily_close(parquet_root)
     daily_returns = daily_close.pct_change()
-    panel = prepare_theme_panel(rotation_dir)
+    panel = prepare_theme_panel(rotation_dir, signal_mode=signal_mode)
     trade_dates = sorted(date for date in panel["trade_date"].drop_duplicates() if date in daily_returns.index)
     panel = panel[panel["trade_date"].isin(trade_dates)].copy()
 
@@ -206,6 +327,7 @@ def run_confirmation_backtest(
             open_trades_df=open_trades_df,
             trade_log_df=trade_log_df,
             strategy_count=len(results_df),
+            signal_mode=signal_mode,
         ),
         encoding="utf-8",
     )
@@ -790,13 +912,16 @@ def _build_confirmation_report(
     open_trades_df: pd.DataFrame,
     trade_log_df: pd.DataFrame,
     strategy_count: int,
+    signal_mode: str,
 ) -> str:
+    title = "# Confirmation Backtest v3 (Causal)" if signal_mode == "causal" else "# Confirmation Backtest v2 (Full Info)"
     lines = [
-        "# Confirmation Backtest v2",
+        title,
         "",
         "## Experiment Setup",
         "",
         f"- Matrix: `6 Entry x 7 Exit x {len(HOLDING_POLICIES)} Holding = {strategy_count} strategies`",
+        f"- Signal mode: `{signal_mode}`",
         "- Baseline portfolio: `Top 3 themes`, equal-weight themes, equal-weight members",
         "- Cost assumption: `10 bps`",
         f"- Completed trades: `{len(trade_log_df)}`",

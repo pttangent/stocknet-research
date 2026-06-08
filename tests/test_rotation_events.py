@@ -176,3 +176,127 @@ def test_build_rotation_outputs_detects_candidate_rotation(tmp_path):
     assert candidate["rewired_edge_pairs"] == "A4-B1"
     assert candidate["source_members"] == "A1,A2,A3,A4"
     assert candidate["target_members"] == "B1,B2,B3,B4"
+
+
+def test_build_rotation_outputs_separates_causal_and_future_derived_metrics(tmp_path):
+    dataset_dir = tmp_path / "dataset"
+    output_dir = tmp_path / "rotation"
+    dataset_dir.mkdir()
+
+    manifest = pd.DataFrame(
+        [
+            {
+                "snapshot_id": "snapshot_0000",
+                "timestamp": "2026-06-03T13:30:00+00:00",
+                "path": _write_snapshot(
+                    dataset_dir,
+                    "snapshot_0000",
+                    node_rows=[
+                        [0.01, 0.01, 0.1, 0.1, 0.1, 0.5, 0.7, 0.7, 0.7],
+                        [0.01, 0.01, 0.1, 0.1, 0.1, 0.5, 0.7, 0.7, 0.7],
+                        [0.01, 0.01, 0.1, 0.1, 0.1, 0.5, 0.7, 0.7, 0.7],
+                        [0.01, 0.01, 0.1, 0.1, 0.1, 0.5, 0.7, 0.7, 0.7],
+                        [0.0, 0.0, 0.0, 0.1, 0.1, 0.5, 0.5, 0.5, 0.5],
+                        [0.0, 0.0, 0.0, 0.1, 0.1, 0.5, 0.5, 0.5, 0.5],
+                        [0.0, 0.0, 0.0, 0.1, 0.1, 0.5, 0.5, 0.5, 0.5],
+                        [0.0, 0.0, 0.0, 0.1, 0.1, 0.5, 0.5, 0.5, 0.5],
+                    ],
+                    edges=[(0, 1, [0.6, 0.6, 0.4, 0.7, 0.0])],
+                ),
+            },
+            {
+                "snapshot_id": "snapshot_0001",
+                "timestamp": "2026-06-03T13:45:00+00:00",
+                "path": _write_snapshot(
+                    dataset_dir,
+                    "snapshot_0001",
+                    node_rows=[
+                        [0.02, 0.02, 0.2, 0.1, 0.1, 0.5, 0.7, 0.7, 0.7],
+                        [0.02, 0.02, 0.2, 0.1, 0.1, 0.5, 0.7, 0.7, 0.7],
+                        [0.02, 0.02, 0.2, 0.1, 0.1, 0.5, 0.7, 0.7, 0.7],
+                        [0.02, 0.02, 0.2, 0.1, 0.1, 0.5, 0.7, 0.7, 0.7],
+                        [0.0, 0.0, 0.0, 0.1, 0.1, 0.5, 0.5, 0.5, 0.5],
+                        [0.0, 0.0, 0.0, 0.1, 0.1, 0.5, 0.5, 0.5, 0.5],
+                        [0.0, 0.0, 0.0, 0.1, 0.1, 0.5, 0.5, 0.5, 0.5],
+                        [0.0, 0.0, 0.0, 0.1, 0.1, 0.5, 0.5, 0.5, 0.5],
+                    ],
+                    edges=[
+                        (0, 1, [0.6, 0.6, 0.4, 0.7, 1.0]),
+                        (2, 3, [0.5, 0.5, 0.3, 0.6, 0.0]),
+                    ],
+                ),
+            },
+        ]
+    )
+    manifest.to_csv(dataset_dir / "snapshot_manifest.csv", index=False)
+
+    pd.DataFrame(
+        [
+            {
+                "snapshot_id": "snapshot_0000",
+                "timestamp": "2026-06-03T13:30:00+00:00",
+                "community_id": 0,
+                "lifecycle_id": "L_A",
+                "members": "A1,A2,A3,A4",
+                "community_size": 4,
+                "age": 1,
+                "stage": "birth",
+            },
+            {
+                "snapshot_id": "snapshot_0001",
+                "timestamp": "2026-06-03T13:45:00+00:00",
+                "community_id": 0,
+                "lifecycle_id": "L_A",
+                "members": "A1,A2,A3,A4",
+                "community_size": 4,
+                "age": 2,
+                "stage": "expansion",
+            },
+        ]
+    ).to_csv(dataset_dir / "lifecycle_communities.csv", index=False)
+
+    pd.DataFrame(
+        [
+            {"snapshot_id": "snapshot_0000", "timestamp": "2026-06-03T13:30:00+00:00", "symbol": "A1", "community_id": 0, "lifecycle_id": "L_A", "previous_lifecycle_id": "", "membership_event": "join"},
+            {"snapshot_id": "snapshot_0000", "timestamp": "2026-06-03T13:30:00+00:00", "symbol": "A2", "community_id": 0, "lifecycle_id": "L_A", "previous_lifecycle_id": "", "membership_event": "join"},
+            {"snapshot_id": "snapshot_0000", "timestamp": "2026-06-03T13:30:00+00:00", "symbol": "A3", "community_id": 0, "lifecycle_id": "L_A", "previous_lifecycle_id": "", "membership_event": "join"},
+            {"snapshot_id": "snapshot_0000", "timestamp": "2026-06-03T13:30:00+00:00", "symbol": "A4", "community_id": 0, "lifecycle_id": "L_A", "previous_lifecycle_id": "", "membership_event": "join"},
+            {"snapshot_id": "snapshot_0001", "timestamp": "2026-06-03T13:45:00+00:00", "symbol": "A1", "community_id": 0, "lifecycle_id": "L_A", "previous_lifecycle_id": "L_A", "membership_event": "stay"},
+            {"snapshot_id": "snapshot_0001", "timestamp": "2026-06-03T13:45:00+00:00", "symbol": "A2", "community_id": 0, "lifecycle_id": "L_A", "previous_lifecycle_id": "L_A", "membership_event": "stay"},
+            {"snapshot_id": "snapshot_0001", "timestamp": "2026-06-03T13:45:00+00:00", "symbol": "A3", "community_id": 0, "lifecycle_id": "L_A", "previous_lifecycle_id": "L_A", "membership_event": "stay"},
+            {"snapshot_id": "snapshot_0001", "timestamp": "2026-06-03T13:45:00+00:00", "symbol": "A4", "community_id": 0, "lifecycle_id": "L_A", "previous_lifecycle_id": "L_A", "membership_event": "stay"},
+        ]
+    ).to_csv(dataset_dir / "node_membership_timeline.csv", index=False)
+
+    pd.DataFrame(
+        [
+            {"snapshot_id": "snapshot_0000", "timestamp": "2026-06-03T13:30:00+00:00", "future_snapshot_id": "snapshot_0001", "symbol": "A1", "community_id": 0, "lifecycle_id": "L_A", "future_community_id": 0, "future_lifecycle_id": "L_A", "migration_label": "stay"},
+        ]
+    ).to_csv(dataset_dir / "node_migration_labels.csv", index=False)
+
+    pd.DataFrame(
+        [
+            {"snapshot_id": "snapshot_0000", "timestamp": "2026-06-03T13:30:00+00:00", "future_snapshot_id": "snapshot_0001", "symbol_left": "A3", "symbol_right": "A4", "present_now": 0, "present_future": 1, "emerges": 1},
+        ]
+    ).to_csv(dataset_dir / "edge_emergence_labels.csv", index=False)
+
+    pd.DataFrame(
+        [
+            {"snapshot_id": "snapshot_0000", "timestamp": "2026-06-03T13:30:00+00:00", "future_snapshot_id": "snapshot_0001", "symbol_left": "A1", "symbol_right": "A2", "persists": 1},
+            {"snapshot_id": "snapshot_0000", "timestamp": "2026-06-03T13:30:00+00:00", "future_snapshot_id": "snapshot_0001", "symbol_left": "A3", "symbol_right": "A4", "persists": 0},
+        ]
+    ).to_csv(dataset_dir / "edge_labels.csv", index=False)
+
+    build_rotation_outputs(dataset_dir=dataset_dir, output_dir=output_dir, min_community_size=4, top_quantile=0.5)
+    community_timeseries = pd.read_csv(output_dir / "community_timeseries.csv").sort_values("timestamp").reset_index(drop=True)
+
+    first_row = community_timeseries.iloc[0]
+    second_row = community_timeseries.iloc[1]
+
+    assert first_row["edge_birth_count"] == 1
+    assert first_row["observed_edge_birth_count"] == 0
+    assert first_row["observed_edge_death_count"] == 0
+    assert second_row["observed_edge_birth_count"] == 1
+    assert second_row["observed_edge_death_count"] == 0
+    assert "causal_rotation_in_score" in community_timeseries.columns
+    assert "causal_rotation_out_score" in community_timeseries.columns

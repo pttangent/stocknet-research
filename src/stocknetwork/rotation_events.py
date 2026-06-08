@@ -99,14 +99,14 @@ def _build_community_timeseries(
         .rename("member_inflow")
         .reset_index()
     )
-    outflow_df = (
+    future_outflow_df = (
         migration_df[migration_df["migration_label"] != "stay"]
         .groupby(["snapshot_id", "lifecycle_id"])
         .size()
         .rename("member_outflow")
         .reset_index()
     )
-    flow_map = inflow_df.merge(outflow_df, on=["snapshot_id", "lifecycle_id"], how="outer").fillna(0)
+    flow_map = inflow_df.merge(future_outflow_df, on=["snapshot_id", "lifecycle_id"], how="outer").fillna(0)
 
     rows: list[dict[str, Any]] = []
     support_map = _best_support_map(cross_res_support)
@@ -162,10 +162,15 @@ def _build_community_timeseries(
                 "avg_community_confidence": avg_community_confidence,
                 "member_inflow": member_inflow,
                 "member_outflow": member_outflow,
+                "future_member_outflow": member_outflow,
                 "edge_birth_count": edge_birth_count,
                 "edge_birth_rate": edge_birth_rate,
+                "future_edge_birth_count": edge_birth_count,
+                "future_edge_birth_rate": edge_birth_rate,
                 "edge_death_count": int(edge_death_count),
                 "edge_death_rate": edge_death_rate,
+                "future_edge_death_count": int(edge_death_count),
+                "future_edge_death_rate": edge_death_rate,
                 "cross_resolution_support": float(cross_support),
                 "members": ",".join(sorted(members)),
                 "internal_edge_count": internal_edge_count,
@@ -176,8 +181,16 @@ def _build_community_timeseries(
     if frame.empty:
         return frame
 
-    for column in ["member_count", "breadth", "coherence", "relative_return"]:
+    for column in ["member_count", "breadth", "coherence", "relative_return", "internal_edge_count"]:
         frame[f"{column}_delta"] = frame.groupby("lifecycle_id")[column].diff().fillna(0.0)
+
+    frame["observed_member_outflow"] = (-frame["member_count_delta"]).clip(lower=0.0)
+    frame["observed_edge_birth_count"] = frame["internal_edge_count_delta"].clip(lower=0.0)
+    frame["observed_edge_death_count"] = (-frame["internal_edge_count_delta"]).clip(lower=0.0)
+    possible_pairs = (frame["member_count"] * (frame["member_count"] - 1) / 2).clip(lower=1.0)
+    frame["observed_edge_birth_rate"] = frame["observed_edge_birth_count"] / possible_pairs
+    frame["observed_edge_death_rate"] = frame["observed_edge_death_count"] / possible_pairs
+    frame["observable_stage"] = frame.apply(_observable_stage, axis=1)
 
     frame = _add_rotation_scores(frame)
     return frame
@@ -527,7 +540,45 @@ def _add_rotation_scores(frame: pd.DataFrame) -> pd.DataFrame:
             + 0.20 * edge_death_z
             + 0.15 * outflow_z
         )
+
+        member_count_delta_z = _zscore(group["member_count_delta"])
+        edge_birth_obs_z = _zscore(group["observed_edge_birth_rate"])
+        edge_death_obs_z = _zscore(group["observed_edge_death_rate"])
+        support_causal_z = _zscore(group["cross_resolution_support"])
+        output.loc[idx, "causal_rotation_in_score"] = (
+            0.20 * rel_z
+            + 0.20 * vol_z
+            + 0.20 * breadth_delta_z
+            + 0.15 * coherence_delta_z
+            + 0.15 * member_count_delta_z
+            + 0.10 * edge_birth_obs_z
+        )
+        output.loc[idx, "causal_rotation_out_score"] = (
+            0.25 * neg_rel_z
+            + 0.20 * coherence_drop_z
+            + 0.20 * breadth_drop_z
+            + 0.20 * _zscore(-group["member_count_delta"])
+            + 0.15 * edge_death_obs_z
+        )
+        output.loc[idx, "causal_rotation_in_score"] += 0.05 * support_causal_z
     return output
+
+
+def _observable_stage(row: pd.Series) -> str:
+    stage = str(row.get("stage", "")).lower()
+    age = int(row.get("age", 0))
+    member_delta = float(row.get("member_count_delta", 0.0))
+    breadth_delta = float(row.get("breadth_delta", 0.0))
+    coherence_delta = float(row.get("coherence_delta", 0.0))
+    if stage == "birth" or age <= 1:
+        return "birth"
+    if member_delta > 0 or (breadth_delta > 0 and coherence_delta >= 0):
+        return "expansion"
+    if member_delta < 0 or breadth_delta < 0 or coherence_delta < 0:
+        return "decay"
+    if age <= 2:
+        return "confirmation"
+    return "maturity"
 
 
 def _zscore(series: pd.Series) -> pd.Series:

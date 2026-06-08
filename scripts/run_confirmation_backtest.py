@@ -15,13 +15,19 @@ from stocknetwork.run_metadata import create_run_context
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Run Confirmation Backtest v1 over lifecycle communities.")
+    parser = argparse.ArgumentParser(description="Run Confirmation Backtest over lifecycle communities.")
     parser.add_argument("--parquet-root", required=True, help="Path to the symbol-partitioned parquet database.")
     parser.add_argument("--rotation-dir", required=True, help="Directory containing rotation/community_timeseries artifacts.")
     parser.add_argument("--output", required=True, help="Output directory for confirmation backtest artifacts.")
     parser.add_argument("--benchmark", default="SPY", help="Benchmark symbol for report context.")
     parser.add_argument("--top-themes", type=int, default=3, help="Number of active themes to hold.")
     parser.add_argument("--cost-bps", type=float, default=10.0, help="Per-turnover transaction cost assumption.")
+    parser.add_argument(
+        "--signal-mode",
+        choices=["causal", "full_info"],
+        default="causal",
+        help="Use causal observable-only features or the full descriptive post-hoc feature set.",
+    )
     parser.add_argument("--run-id", default="", help="Optional explicit run identifier.")
     parser.add_argument("--run-label", default="", help="Optional short label for this run.")
     parser.add_argument("--run-notes", default="", help="Optional notes.")
@@ -53,6 +59,7 @@ def main() -> int:
         benchmark_symbol=args.benchmark,
         top_themes=args.top_themes,
         transaction_cost_bps=args.cost_bps,
+        signal_mode=args.signal_mode,
     )
 
     run_context.write_validation(
@@ -60,6 +67,7 @@ def main() -> int:
             "benchmark": args.benchmark,
             "top_themes": args.top_themes,
             "cost_bps": args.cost_bps,
+            "signal_mode": args.signal_mode,
         }
     )
     run_context.write_artifacts(
