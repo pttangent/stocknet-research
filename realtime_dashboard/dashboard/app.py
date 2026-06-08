@@ -66,7 +66,7 @@ st.markdown("""
 # Session State Initialization
 def init_session_state():
     defaults = {
-        "config": RadarConfig(mode="demo"),
+        "config": RadarConfig(mode="live"),
         "feed": None,
         "historical_feed": None,
         "feature_engine": None,
@@ -87,6 +87,9 @@ def init_session_state():
         "scan_count": 0,
         "last_update": None,
         "warmup_done": False,
+        "auto_start_live_scan": True,
+        "auto_refresh_enabled": True,
+        "refresh_interval_seconds": 60,
     }
     for key, val in defaults.items():
         if key not in st.session_state:
@@ -386,10 +389,22 @@ def render_sidebar():
             index=0,
         )
 
-        auto_refresh = st.toggle("Auto-refresh", value=False)
+        auto_refresh = st.toggle("Auto-refresh", value=st.session_state.auto_refresh_enabled)
         refresh_interval = st.number_input(
-            "Refresh Interval (sec)", min_value=5, max_value=300, value=60, step=5
+            "Refresh Interval (sec)",
+            min_value=5,
+            max_value=300,
+            value=st.session_state.refresh_interval_seconds,
+            step=5,
         )
+        auto_start_live_scan = st.toggle(
+            "Auto-start live scan",
+            value=st.session_state.auto_start_live_scan,
+            help="Initialize and run live scanning automatically on app load using the current default parameters.",
+        )
+        st.session_state.auto_start_live_scan = auto_start_live_scan
+        st.session_state.auto_refresh_enabled = auto_refresh
+        st.session_state.refresh_interval_seconds = refresh_interval
 
         st.divider()
 
@@ -456,7 +471,7 @@ def render_sidebar():
         if st.session_state.current_time:
             st.write(f"Data time: {st.session_state.current_time.strftime('%H:%M')}")
 
-        return auto_refresh, refresh_interval
+        return auto_refresh, refresh_interval, universe
 
 
 # Main App
@@ -469,7 +484,23 @@ def main():
         "Launch with `python -m streamlit run realtime_dashboard/dashboard/app.py`"
     )
 
-    auto_refresh, refresh_interval = render_sidebar()
+    auto_refresh, refresh_interval, universe = render_sidebar()
+
+    if (
+        st.session_state.auto_start_live_scan
+        and st.session_state.config.mode in ("live", "hybrid")
+        and not st.session_state.initialized
+    ):
+        initialize_system(st.session_state.config, universe=universe)
+        run_scan(st.session_state.config, frequency=st.session_state.config.data_source.interval)
+
+    elif (
+        st.session_state.auto_start_live_scan
+        and auto_refresh
+        and st.session_state.initialized
+        and st.session_state.config.mode in ("live", "hybrid")
+    ):
+        run_scan(st.session_state.config, frequency=st.session_state.config.data_source.interval)
 
     tabs = st.tabs(["Live Radar", "Timeline", "Market Map", "Review"])
 
@@ -527,8 +558,11 @@ def main():
         )
 
     if auto_refresh and st.session_state.initialized:
-        st.empty()
         st.caption(f"Auto-refreshing every {refresh_interval}s...")
+        st.markdown(
+            f'<meta http-equiv="refresh" content="{int(refresh_interval)}">',
+            unsafe_allow_html=True,
+        )
 
 
 if __name__ == "__main__":
