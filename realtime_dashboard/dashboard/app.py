@@ -64,11 +64,71 @@ st.markdown("""
 
 
 # Session State Initialization
+def _query_param_str(name: str, default: str) -> str:
+    value = st.query_params.get(name, default)
+    if isinstance(value, list):
+        return str(value[0]) if value else default
+    return str(value)
+
+
+def _query_param_bool(name: str, default: bool) -> bool:
+    value = _query_param_str(name, str(default).lower()).strip().lower()
+    return value in {"1", "true", "yes", "on"}
+
+
+def _query_param_int(name: str, default: int) -> int:
+    try:
+        return int(_query_param_str(name, str(default)))
+    except Exception:
+        return default
+
+
+def _sync_query_params() -> None:
+    config = st.session_state.config
+    st.query_params["mode"] = config.mode
+    st.query_params["interval"] = config.data_source.interval
+    st.query_params["scan_mode"] = config.data_source.scan_mode
+    st.query_params["universe"] = st.session_state.get("universe", "watchlist")
+    st.query_params["exclude_etf_cef"] = str(config.universe.exclude_etf_cef).lower()
+    st.query_params["keep_benchmarks"] = str(config.universe.keep_benchmark_symbols).lower()
+    st.query_params["auto_refresh"] = str(st.session_state.auto_refresh_enabled).lower()
+    st.query_params["refresh_interval"] = str(st.session_state.refresh_interval_seconds)
+    st.query_params["auto_start_live_scan"] = str(st.session_state.auto_start_live_scan).lower()
+    st.query_params["chunk_size"] = str(config.data_source.chunk_size)
+    st.query_params["max_workers"] = str(config.data_source.max_workers)
+
+
+def _resolve_scan_timestamp(bars_df: pd.DataFrame) -> datetime:
+    """Use the dominant market bar timestamp instead of scan wall-clock time."""
+    timestamps = pd.to_datetime(bars_df["timestamp"], utc=True)
+    counts = timestamps.value_counts()
+    if counts.empty:
+        return datetime.now()
+    dominant = counts[counts == counts.max()].index.max()
+    return pd.Timestamp(dominant).to_pydatetime()
+
+
 def init_session_state():
-    default_mode = os.environ.get("STOCKNET_RADAR_MODE", "live")
+    default_mode = _query_param_str("mode", os.environ.get("STOCKNET_RADAR_MODE", "live"))
     historical_dir_override = os.environ.get("STOCKNET_RADAR_HISTORICAL_DIR", "").strip()
+    default_interval = _query_param_str("interval", "1m")
+    default_scan_mode = _query_param_str("scan_mode", "full_parallel")
+    default_refresh_seconds = _query_param_int("refresh_interval", 60)
+    default_auto_refresh = _query_param_bool("auto_refresh", True)
+    default_auto_start = _query_param_bool("auto_start_live_scan", True)
+    default_exclude = _query_param_bool("exclude_etf_cef", True)
+    default_keep_benchmarks = _query_param_bool("keep_benchmarks", False)
+    default_chunk_size = _query_param_int("chunk_size", 200)
+    default_max_workers = _query_param_int("max_workers", 64)
+    config = RadarConfig(mode=default_mode)
+    config.data_source.interval = default_interval
+    config.data_source.scan_mode = default_scan_mode
+    config.data_source.chunk_size = default_chunk_size
+    config.data_source.max_workers = default_max_workers
+    config.universe.exclude_etf_cef = default_exclude
+    config.universe.keep_benchmark_symbols = default_keep_benchmarks
     defaults = {
-        "config": RadarConfig(mode=default_mode),
+        "config": config,
         "feed": None,
         "historical_feed": None,
         "feature_engine": None,
@@ -89,9 +149,10 @@ def init_session_state():
         "scan_count": 0,
         "last_update": None,
         "warmup_done": False,
-        "auto_start_live_scan": True,
-        "auto_refresh_enabled": True,
-        "refresh_interval_seconds": 60,
+        "auto_start_live_scan": default_auto_start,
+        "auto_refresh_enabled": default_auto_refresh,
+        "refresh_interval_seconds": default_refresh_seconds,
+        "universe": _query_param_str("universe", "watchlist"),
     }
     for key, val in defaults.items():
         if key not in st.session_state:
@@ -280,7 +341,7 @@ def run_scan(config: RadarConfig, frequency: str = "1m"):
     communities_df = scorer.score(communities_df, memberships_df, edges_df)
 
     # Process alerts
-    timestamp = bars[0].timestamp if bars else datetime.now()
+    timestamp = _resolve_scan_timestamp(bars_df)
     alerts = alert_engine.process(timestamp, communities_df, memberships_df, frequency)
 
     # Update community levels from alerts
@@ -336,24 +397,33 @@ def render_sidebar():
                 1 if st.session_state.config.mode == "live" else 2
             ),
             help="demo=simulated, live=Yahoo Finance polling, hybrid=historical warmup + live"
+            ,
+            key="mode_widget",
         )
         st.session_state.config.mode = mode
 
         # Data source settings
         ds = st.session_state.config.data_source
         if mode in ("live", "hybrid"):
-            ds.interval = st.selectbox("Interval", ["1m", "5m", "15m"], index=0)
+            ds.interval = st.selectbox(
+                "Interval",
+                ["1m", "5m", "15m"],
+                index=["1m", "5m", "15m"].index(ds.interval if ds.interval in {"1m", "5m", "15m"} else "1m"),
+                key="interval_widget",
+            )
             ds.scan_mode = st.radio(
                 "Scan Mode",
                 ["chunked", "full_parallel"],
                 index=0 if ds.scan_mode == "chunked" else 1,
                 help="chunked = rotate across the universe; full_parallel = fetch the whole universe each scan.",
+                key="scan_mode_widget",
             )
-            ds.max_workers = st.slider("Fetch Workers", 4, 64, ds.max_workers)
+            ds.max_workers = st.slider("Fetch Workers", 4, 64, ds.max_workers, key="max_workers_widget")
             if ds.scan_mode == "chunked":
                 ds.chunk_size = st.number_input(
                     "Chunk Size", 50, 500, ds.chunk_size, 50,
-                    help="Symbols fetched per scan. Lower = faster per scan, more scans to cover market."
+                    help="Symbols fetched per scan. Lower = faster per scan, more scans to cover market.",
+                    key="chunk_size_widget",
                 )
             else:
                 st.caption(
@@ -370,28 +440,36 @@ def render_sidebar():
         universe = st.radio(
             "Universe",
             ["watchlist", "core_500", "full_market"],
-            index=0,
-            help="watchlist=custom list, core_500=top 500 from manifest, full_market=all symbols from manifest"
+            index=["watchlist", "core_500", "full_market"].index(
+                st.session_state.universe if st.session_state.universe in {"watchlist", "core_500", "full_market"} else "watchlist"
+            ),
+            help="watchlist=custom list, core_500=top 500 from manifest, full_market=all symbols from manifest",
+            key="universe_widget",
         )
+        st.session_state.universe = universe
         st.session_state.config.universe.exclude_etf_cef = st.toggle(
             "Exclude ETF / CEF universe",
             value=st.session_state.config.universe.exclude_etf_cef,
             help="Filter symbols listed in the ETF/CEF blacklist CSV before scanning communities.",
+            key="exclude_etf_widget",
         )
         st.session_state.config.universe.keep_benchmark_symbols = st.toggle(
             "Keep benchmark ETFs for relative metrics",
             value=st.session_state.config.universe.keep_benchmark_symbols,
             help="If enabled, benchmark symbols like SPY/QQQ stay in the fetched universe even when blacklisted.",
+            key="keep_benchmarks_widget",
         )
         st.session_state.config.universe.exclude_symbol_csv = st.text_input(
             "ETF/CEF Blacklist CSV",
             value=st.session_state.config.universe.exclude_symbol_csv,
+            key="exclude_csv_widget",
         )
 
         scan_freq = st.selectbox(
             "Scan Frequency",
             ["1m", "5m", "15m"],
             index=0,
+            key="scan_freq_widget",
         )
 
         auto_refresh = st.toggle("Auto-refresh", value=st.session_state.auto_refresh_enabled)
@@ -410,6 +488,7 @@ def render_sidebar():
         st.session_state.auto_start_live_scan = auto_start_live_scan
         st.session_state.auto_refresh_enabled = auto_refresh
         st.session_state.refresh_interval_seconds = refresh_interval
+        _sync_query_params()
 
         st.divider()
 
