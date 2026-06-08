@@ -172,3 +172,7 @@ def test_build_rotation_outputs_detects_candidate_rotation(tmp_path):
     assert candidate["target_lifecycle_id"] == "L_B"
     assert candidate["migrated_members"] >= 1
     assert candidate["rewired_edges"] >= 1
+    assert candidate["migrated_symbols"] == "A4"
+    assert candidate["rewired_edge_pairs"] == "A4-B1"
+    assert candidate["source_members"] == "A1,A2,A3,A4"
+    assert candidate["target_members"] == "B1,B2,B3,B4"

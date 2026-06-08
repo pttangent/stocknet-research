@@ -230,11 +230,17 @@ def _detect_rotation_events(
                         ]
                     )
                 )
-                rewired_edges = _cross_emergent_edges(
+                migrated_symbols = _migrated_symbols(
+                    migration_slice,
+                    source_lifecycle_id=str(source["lifecycle_id"]),
+                    target_lifecycle_id=str(target["lifecycle_id"]),
+                )
+                rewired_edge_pairs = _cross_emergent_edge_pairs(
                     emergence_slice,
                     membership_lookup.get(source["lifecycle_id"], set()),
                     membership_lookup.get(target["lifecycle_id"], set()),
                 )
+                rewired_edges = len(rewired_edge_pairs)
                 relative_strength_switch = float(target["relative_return"] - source["relative_return"])
                 flow_score = float(np.log1p(migrated_members * 2 + rewired_edges + max(relative_strength_switch * 100, 0.0)))
                 rotation_confidence = (
@@ -250,14 +256,20 @@ def _detect_rotation_events(
                         "timestamp": timestamp,
                         "source_lifecycle_id": source["lifecycle_id"],
                         "target_lifecycle_id": target["lifecycle_id"],
+                        "source_stage": source["stage"],
+                        "target_stage": target["stage"],
                         "source_decay_score": float(source["rotation_out_score"]),
                         "target_expansion_score": float(target["rotation_in_score"]),
                         "migrated_members": migrated_members,
+                        "migrated_symbols": ";".join(migrated_symbols),
                         "rewired_edges": rewired_edges,
+                        "rewired_edge_pairs": ";".join(rewired_edge_pairs),
                         "relative_strength_switch": relative_strength_switch,
                         "flow_score": flow_score,
                         "cross_resolution_confirmation": float(target["cross_resolution_support"]),
                         "rotation_confidence": rotation_confidence,
+                        "source_members": ",".join(sorted(membership_lookup.get(source["lifecycle_id"], set()))),
+                        "target_members": ",".join(sorted(membership_lookup.get(target["lifecycle_id"], set()))),
                     }
                 )
 
@@ -302,7 +314,24 @@ def _build_report(community_timeseries: pd.DataFrame, rotation_events: pd.DataFr
     if qualified_events.empty:
         lines.append("No rotation candidates passed the current thresholds.")
     else:
-        lines.extend(_markdown_table(qualified_events.head(20)))
+        lines.extend(
+            _markdown_table(
+                qualified_events.head(20)[
+                    [
+                        "timestamp",
+                        "source_lifecycle_id",
+                        "target_lifecycle_id",
+                        "source_stage",
+                        "target_stage",
+                        "migrated_members",
+                        "migrated_symbols",
+                        "rewired_edges",
+                        "rewired_edge_pairs",
+                        "rotation_confidence",
+                    ]
+                ]
+            )
+        )
 
     if not community_timeseries.empty:
         lines.extend(
@@ -434,14 +463,37 @@ def _internal_edge_death_rate(
 
 
 def _cross_emergent_edges(emergence_slice: pd.DataFrame, source_members: set[str], target_members: set[str]) -> int:
+    return len(_cross_emergent_edge_pairs(emergence_slice, source_members, target_members))
+
+
+def _cross_emergent_edge_pairs(emergence_slice: pd.DataFrame, source_members: set[str], target_members: set[str]) -> list[str]:
     if emergence_slice.empty:
-        return 0
+        return []
     emerged = emergence_slice[emergence_slice["emerges"] == 1]
     mask = (
         (emerged["symbol_left"].isin(source_members) & emerged["symbol_right"].isin(target_members))
         | (emerged["symbol_left"].isin(target_members) & emerged["symbol_right"].isin(source_members))
     )
-    return int(mask.sum())
+    pairs: list[str] = []
+    for _, row in emerged[mask].iterrows():
+        left = str(row["symbol_left"])
+        right = str(row["symbol_right"])
+        ordered = sorted([left, right])
+        pairs.append(f"{ordered[0]}-{ordered[1]}")
+    return sorted(set(pairs))
+
+
+def _migrated_symbols(migration_slice: pd.DataFrame, source_lifecycle_id: str, target_lifecycle_id: str) -> list[str]:
+    if migration_slice.empty:
+        return []
+    subset = migration_slice[
+        (migration_slice["lifecycle_id"] == source_lifecycle_id)
+        & (migration_slice["future_lifecycle_id"] == target_lifecycle_id)
+        & (migration_slice["migration_label"] == "migrate")
+    ]
+    if subset.empty:
+        return []
+    return sorted(str(symbol) for symbol in subset["symbol"].astype(str).tolist())
 
 
 def _add_rotation_scores(frame: pd.DataFrame) -> pd.DataFrame:
@@ -509,6 +561,9 @@ def _markdown_table(frame: pd.DataFrame) -> list[str]:
         parts = []
         for column in columns:
             value = row[column]
+            if pd.isna(value):
+                parts.append("")
+                continue
             if isinstance(value, float):
                 parts.append(f"{value:.6f}")
             else:

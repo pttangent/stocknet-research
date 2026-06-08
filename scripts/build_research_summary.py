@@ -72,6 +72,9 @@ def markdown_table(frame: pd.DataFrame) -> list[str]:
         values: list[str] = []
         for column in columns:
             value = row[column]
+            if pd.isna(value):
+                values.append("")
+                continue
             if isinstance(value, float):
                 values.append(f"{value:.6f}")
             else:
@@ -351,11 +354,12 @@ def build_report(artifacts_root: Path, output_path: Path, final_output_path: Pat
                         "timestamp",
                         "source_lifecycle_id",
                         "target_lifecycle_id",
-                        "source_decay_score",
-                        "target_expansion_score",
+                        "source_stage",
+                        "target_stage",
                         "migrated_members",
+                        "migrated_symbols",
                         "rewired_edges",
-                        "relative_strength_switch",
+                        "rewired_edge_pairs",
                         "rotation_confidence",
                     ]
                 ]
