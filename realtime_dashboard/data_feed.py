@@ -164,6 +164,7 @@ class YahooFinanceLiveFeed(DataFeed):
     def __init__(
         self,
         interval: str = "1m",
+        scan_mode: str = "chunked",
         lookback_days: int = 7,
         timeout: float = 15.0,
         retries: int = 2,
@@ -172,6 +173,7 @@ class YahooFinanceLiveFeed(DataFeed):
         chunk_size: int = 200,
     ):
         self.interval = interval
+        self.scan_mode = scan_mode
         self.lookback_days = lookback_days
         self.timeout = timeout
         self.retries = retries
@@ -191,6 +193,8 @@ class YahooFinanceLiveFeed(DataFeed):
         """Get the next chunk of symbols for round-robin fetching."""
         if not self._all_symbols:
             return []
+        if self.scan_mode == "full_parallel" or self.chunk_size <= 0:
+            return list(self._all_symbols)
         n = len(self._all_symbols)
         start = self._chunk_index * self.chunk_size
         if start >= n:
@@ -205,6 +209,8 @@ class YahooFinanceLiveFeed(DataFeed):
         """Return (current_chunk, total_chunks)."""
         if not self._all_symbols:
             return 0, 0
+        if self.scan_mode == "full_parallel" or self.chunk_size <= 0:
+            return 1, 1
         total = (len(self._all_symbols) + self.chunk_size - 1) // self.chunk_size
         return self._chunk_index, total
 
@@ -377,7 +383,19 @@ class YahooFinanceLiveFeed(DataFeed):
         if errors and len(errors) > len(chunk) * 0.3:
             logger.error(f"High error rate: {len(errors)}/{len(chunk)} symbols failed")
 
-        logger.info(f"Fetched {new_bars_count} new bars from chunk {self._chunk_index}/{self.get_chunk_progress()[1]}")
+        if self.scan_mode == "full_parallel" or self.chunk_size <= 0:
+            logger.info(
+                "Fetched %s new bars from full parallel scan across %s symbols",
+                new_bars_count,
+                len(chunk),
+            )
+        else:
+            logger.info(
+                "Fetched %s new bars from chunk %s/%s",
+                new_bars_count,
+                self._chunk_index,
+                self.get_chunk_progress()[1],
+            )
         return bars
 
     def _is_incomplete_bar(self, row: pd.Series) -> bool:

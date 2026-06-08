@@ -160,6 +160,7 @@ class DataSourceConfig:
     """Live data source configuration."""
     provider: str = "yahoo"  # "yahoo", "alpaca", "polygon"
     interval: str = "1m"     # "1m", "5m", "15m"
+    scan_mode: str = "chunked"  # "chunked", "full_parallel"
     lookback_days: int = 7   # How many days of history to fetch on init
     timeout_seconds: float = 15.0
     retries: int = 2

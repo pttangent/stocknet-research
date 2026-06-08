@@ -57,6 +57,10 @@ cd D:\DEV\stocknetwork\StockNet
 python -m streamlit run realtime_dashboard/dashboard/app.py
 ```
 
+Frontend entry file:
+
+`D:\DEV\stocknetwork\StockNet\realtime_dashboard\dashboard\app.py`
+
 ### 3. Build a local 1m archive
 
 ```bash
@@ -73,6 +77,17 @@ python realtime_dashboard/scripts/archive_yfinance_1m.py --exclude-csv D:\DEV\st
 ```
 
 `--scans 0` means run continuously until you stop the process.
+
+## Scan Modes
+
+The live dashboard now supports two scan modes:
+
+- `chunked`: scan one chunk of the universe per cycle
+- `full_parallel`: scan the full loaded universe every cycle using the configured worker pool
+
+`full_parallel` is the right choice when you have a strong workstation and want
+the freshest possible whole-universe community map. It is still limited by
+Yahoo response quality and rate limits, not by your CPU or GPU alone.
 
 ### 4. Run a simulated demo
 

@@ -101,12 +101,14 @@ def get_demo_feed(seed: int = 42):
 @st.cache_resource
 def get_live_feed(
     interval: str = "1m",
+    scan_mode: str = "chunked",
     lookback_days: int = 7,
     max_workers: int = 16,
     timeout: float = 15.0,
 ):
     return YahooFinanceLiveFeed(
         interval=interval,
+        scan_mode=scan_mode,
         lookback_days=lookback_days,
         max_workers=max_workers,
         timeout=timeout,
@@ -132,7 +134,11 @@ def initialize_system(config: RadarConfig, universe: str = "custom"):
     ds = config.data_source
 
     st.session_state.symbols = symbols
-    total_chunks = (len(symbols) + ds.chunk_size - 1) // ds.chunk_size if ds.chunk_size > 0 else 1
+    total_chunks = (
+        1
+        if ds.scan_mode == "full_parallel"
+        else (len(symbols) + ds.chunk_size - 1) // ds.chunk_size if ds.chunk_size > 0 else 1
+    )
 
     if mode == "demo":
         st.session_state.feed = get_demo_feed(seed=42)
@@ -141,6 +147,7 @@ def initialize_system(config: RadarConfig, universe: str = "custom"):
     elif mode == "live":
         feed = get_live_feed(
             interval=ds.interval,
+            scan_mode=ds.scan_mode,
             lookback_days=ds.lookback_days,
             max_workers=ds.max_workers,
             timeout=ds.timeout_seconds,
@@ -148,7 +155,14 @@ def initialize_system(config: RadarConfig, universe: str = "custom"):
         feed.set_symbols(symbols)
         feed.chunk_size = ds.chunk_size
         st.session_state.feed = feed
-        st.info(f"Mode: LIVE | {len(symbols)} symbols | {ds.chunk_size}/chunk | ~{total_chunks} chunks/cycle")
+        if ds.scan_mode == "full_parallel":
+            st.info(
+                f"Mode: LIVE | full parallel scan | {len(symbols)} symbols | {ds.max_workers} workers"
+            )
+        else:
+            st.info(
+                f"Mode: LIVE | {len(symbols)} symbols | {ds.chunk_size}/chunk | ~{total_chunks} chunks/cycle"
+            )
 
     elif mode == "hybrid":
         # Historical warmup + live polling
@@ -162,6 +176,7 @@ def initialize_system(config: RadarConfig, universe: str = "custom"):
 
         live_feed = get_live_feed(
             interval=ds.interval,
+            scan_mode=ds.scan_mode,
             lookback_days=ds.lookback_days,
             max_workers=ds.max_workers,
             timeout=ds.timeout_seconds,
@@ -172,7 +187,12 @@ def initialize_system(config: RadarConfig, universe: str = "custom"):
         live_feed.preload_from_historical(hist_df)
         st.session_state.historical_feed = hist_feed
         st.session_state.feed = live_feed
-        st.info(f"Mode: HYBRID - Historical warmup + live {ds.interval} polling")
+        if ds.scan_mode == "full_parallel":
+            st.info(
+                f"Mode: HYBRID | Historical warmup + full parallel live {ds.interval} polling"
+            )
+        else:
+            st.info(f"Mode: HYBRID - Historical warmup + live {ds.interval} polling")
 
     st.session_state.feature_engine = RollingFeatureEngine(config.feature)
     st.session_state.graph_builder = GraphBuilder(config.graph)
@@ -315,9 +335,23 @@ def render_sidebar():
         ds = st.session_state.config.data_source
         if mode in ("live", "hybrid"):
             ds.interval = st.selectbox("Interval", ["1m", "5m", "15m"], index=0)
-            ds.max_workers = st.slider("Fetch Workers", 4, 64, 32)
-            ds.chunk_size = st.number_input("Chunk Size", 50, 500, 200, 50,
-                help="Symbols fetched per scan. Lower = faster per scan, more scans to cover market.")
+            ds.scan_mode = st.radio(
+                "Scan Mode",
+                ["chunked", "full_parallel"],
+                index=0 if ds.scan_mode == "chunked" else 1,
+                help="chunked = rotate across the universe; full_parallel = fetch the whole universe each scan.",
+            )
+            ds.max_workers = st.slider("Fetch Workers", 4, 64, ds.max_workers)
+            if ds.scan_mode == "chunked":
+                ds.chunk_size = st.number_input(
+                    "Chunk Size", 50, 500, ds.chunk_size, 50,
+                    help="Symbols fetched per scan. Lower = faster per scan, more scans to cover market."
+                )
+            else:
+                st.caption(
+                    "Full parallel mode uses all loaded symbols every scan. This is faster for strong machines, "
+                    "but Yahoo may rate-limit very large universes."
+                )
             if mode == "hybrid":
                 ds.historical_parquet_dir = st.text_input(
                     "Historical Parquet Dir",
@@ -408,7 +442,10 @@ def render_sidebar():
         st.divider()
 
         st.markdown("### Session Info")
+        st.caption("Frontend path: `D:/DEV/stocknetwork/StockNet/realtime_dashboard/dashboard/app.py`")
+        st.caption("Launch: `python -m streamlit run realtime_dashboard/dashboard/app.py`")
         st.write(f"Mode: **{st.session_state.config.mode}**")
+        st.write(f"Scan mode: **{st.session_state.config.data_source.scan_mode}**")
         st.write(f"Scans: **{st.session_state.scan_count}**")
         if st.session_state.get("symbols"):
             st.write(f"Symbols: **{len(st.session_state.symbols)}**")
@@ -425,6 +462,12 @@ def render_sidebar():
 # Main App
 def main():
     init_session_state()
+
+    st.title("Realtime Community Monitoring Radar")
+    st.caption(
+        "Frontend entry: `D:/DEV/stocknetwork/StockNet/realtime_dashboard/dashboard/app.py` | "
+        "Launch with `python -m streamlit run realtime_dashboard/dashboard/app.py`"
+    )
 
     auto_refresh, refresh_interval = render_sidebar()
 
