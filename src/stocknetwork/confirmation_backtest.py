@@ -253,6 +253,7 @@ def run_confirmation_backtest(
     top_themes: int = 3,
     transaction_cost_bps: float = 10.0,
     signal_mode: str = "causal",
+    exit_lag_days: int = 1,
 ) -> dict[str, Any]:
     parquet_root = Path(parquet_root).expanduser().resolve()
     rotation_dir = Path(rotation_dir).expanduser().resolve()
@@ -294,6 +295,7 @@ def run_confirmation_backtest(
             benchmark_symbol=benchmark_symbol,
             top_themes=top_themes,
             transaction_cost_bps=transaction_cost_bps,
+            exit_lag_days=exit_lag_days,
         )
         results_rows.append(strategy_result["summary"])
         trade_rows.extend(strategy_result["trades"])
@@ -303,6 +305,7 @@ def run_confirmation_backtest(
     trade_log_df = pd.DataFrame(trade_rows).sort_values(["strategy_id", "entry_time", "lifecycle_id"]).reset_index(drop=True)
     portfolio_df = pd.DataFrame(portfolio_rows).sort_values(["strategy_id", "trade_date"]).reset_index(drop=True)
 
+    trade_log_df = _enrich_trade_log_post_exit_metrics(trade_log_df, daily_returns, trade_dates)
     leaderboard_df = _build_leaderboard(results_df)
     entry_summary_df = _group_summary(results_df, "entry_standard")
     exit_summary_df = _group_summary(results_df, "exit_standard")
@@ -336,6 +339,7 @@ def run_confirmation_backtest(
             trade_log_df=trade_log_df,
             strategy_count=len(results_df),
             signal_mode=signal_mode,
+            exit_lag_days=exit_lag_days,
         ),
         encoding="utf-8",
     )
@@ -352,6 +356,7 @@ def _add_daily_cross_sectional_scores(frame: pd.DataFrame) -> pd.DataFrame:
     output = frame.copy()
     grouped = output.groupby("trade_date")
     output["coherence_pct"] = grouped["coherence"].rank(method="average", pct=True)
+    output["volume_pct"] = grouped["volume_expansion"].rank(method="average", pct=True)
     output["edge_birth_pct"] = grouped["edge_birth_rate"].rank(method="average", pct=True)
     output["rotation_in_pct"] = grouped["rotation_in_score"].rank(method="average", pct=True)
     output["rotation_out_pct"] = grouped["rotation_out_score"].rank(method="average", pct=True)
@@ -453,6 +458,7 @@ def _run_single_strategy(
     benchmark_symbol: str,
     top_themes: int,
     transaction_cost_bps: float,
+    exit_lag_days: int,
 ) -> dict[str, Any]:
     entry_rule: EntryRule = strategy["entry_rule"]
     exit_rule: ExitRule = strategy["exit_rule"]
@@ -484,10 +490,33 @@ def _run_single_strategy(
 
         gross_return = float(np.mean(theme_daily_returns)) if theme_daily_returns else 0.0
 
+        # Realize previously scheduled exits after today's return.
+        for theme_path_id in list(open_trades.keys()):
+            trade_state = open_trades[theme_path_id]
+            current_row = day_lookup.get(theme_path_id)
+            if trade_state.get("pending_exit_date") == trade_date:
+                exit_count += 1
+                trade_rows.append(
+                    _finalize_trade(
+                        strategy_id=strategy["strategy_id"],
+                        entry_rule=entry_rule,
+                        exit_rule=exit_rule,
+                        holding_policy=holding_policy,
+                        trade_state=trade_state,
+                        current_row=current_row,
+                        exit_reason=str(trade_state.get("pending_exit_reason", "scheduled_exit")),
+                        trade_date=trade_date,
+                        is_open_trade=False,
+                    )
+                )
+                del open_trades[theme_path_id]
+
         # Exit pass at end of date.
         for theme_path_id in list(open_trades.keys()):
             trade_state = open_trades[theme_path_id]
             current_row = day_lookup.get(theme_path_id)
+            if trade_state.get("pending_exit_date") is not None:
+                continue
             exit_decision = _should_exit_trade(
                 exit_rule=exit_rule,
                 holding_policy=holding_policy,
@@ -498,21 +527,26 @@ def _run_single_strategy(
             )
             if not exit_decision["should_exit"]:
                 continue
-            exit_count += 1
-            trade_rows.append(
-                _finalize_trade(
-                    strategy_id=strategy["strategy_id"],
-                    entry_rule=entry_rule,
-                    exit_rule=exit_rule,
-                    holding_policy=holding_policy,
-                    trade_state=trade_state,
-                    current_row=current_row,
-                    exit_reason=exit_decision["reason"],
-                    trade_date=trade_date,
-                    is_open_trade=False,
+            if exit_lag_days <= 0:
+                exit_count += 1
+                trade_rows.append(
+                    _finalize_trade(
+                        strategy_id=strategy["strategy_id"],
+                        entry_rule=entry_rule,
+                        exit_rule=exit_rule,
+                        holding_policy=holding_policy,
+                        trade_state=trade_state,
+                        current_row=current_row,
+                        exit_reason=exit_decision["reason"],
+                        trade_date=trade_date,
+                        is_open_trade=False,
+                    )
                 )
-            )
-            del open_trades[theme_path_id]
+                del open_trades[theme_path_id]
+            else:
+                effective_idx = date_to_idx.get(trade_date, 0) + exit_lag_days
+                trade_state["pending_exit_date"] = trade_dates[min(effective_idx, len(trade_dates) - 1)]
+                trade_state["pending_exit_reason"] = exit_decision["reason"]
 
         # Entry pass after exits.
         available_slots = max(top_themes - len(open_trades), 0)
@@ -534,8 +568,20 @@ def _run_single_strategy(
                         "entry_members": list(row["members_list"]),
                         "daily_returns": [],
                         "entry_reason": _entry_reason(entry_rule, row),
+                        "birth_date": row.get("birth_date"),
+                        "time_to_entry_days": int((trade_date - row.get("birth_date")).days) if pd.notna(row.get("birth_date")) else 0,
+                        "time_to_entry_windows": int(row.get("active_windows", 1)),
+                        "missed_return_before_entry": _cumulative_basket_return(
+                            list(row["members_list"]),
+                            daily_returns,
+                            row.get("birth_date"),
+                            trade_date,
+                            include_end=False,
+                        ),
                         "missing_days": 0,
                         "signal_streak": 0,
+                        "pending_exit_date": None,
+                        "pending_exit_reason": "",
                     }
                     entry_count += 1
 
@@ -594,8 +640,12 @@ def _entry_signal(entry_rule: EntryRule, row: pd.Series) -> bool:
     stage = str(row.get("stage", "")).lower()
     signal_mode = str(row.get("signal_mode", ""))
     if entry_rule.code == "E1":
+        if signal_mode == "causal":
+            return stage == "birth" and row["member_count"] >= 4 and row["coherence_pct"] >= 0.60 and row["volume_pct"] >= 0.60 and row["breadth_pct"] >= 0.50
         return stage in {"birth", "emergence"} and row["member_count"] >= 4 and row["coherence_pct"] >= 0.60 and row["edge_birth_pct"] >= 0.70
     if entry_rule.code == "E2":
+        if signal_mode == "causal":
+            return int(row["age"]) in {2, 3} and row["member_count_delta"] >= 0 and row["coherence_delta"] >= 0 and row["breadth_delta"] >= 0 and row["relative_return"] > 0
         return stage in {"emergence", "confirmation"} and row["active_windows"] >= 2 and row["coherence_delta"] > 0 and row["volume_expansion"] > 0 and row["breadth_delta"] > 0
     if entry_rule.code == "E3":
         return row["age"] >= 2 and stage in {"confirmation", "expansion", "maturity"}
@@ -727,6 +777,27 @@ def _basket_return(members: list[str], daily_returns: pd.DataFrame, trade_date: 
     return float(row.mean())
 
 
+def _cumulative_basket_return(
+    members: list[str],
+    daily_returns: pd.DataFrame,
+    start_date: pd.Timestamp | Any,
+    end_date: pd.Timestamp,
+    include_end: bool = True,
+) -> float:
+    if start_date is None or pd.isna(start_date):
+        return 0.0
+    start_ts = pd.Timestamp(start_date)
+    end_ts = pd.Timestamp(end_date)
+    if end_ts <= start_ts:
+        return 0.0
+    dates = [idx for idx in daily_returns.index if idx > start_ts and (idx <= end_ts if include_end else idx < end_ts)]
+    if not dates:
+        return 0.0
+    returns = [_basket_return(members, daily_returns, trade_date) for trade_date in dates]
+    curve = pd.Series(returns, dtype=float)
+    return float((1.0 + curve.fillna(0.0)).prod() - 1.0) if not curve.empty else 0.0
+
+
 def _finalize_trade(
     strategy_id: str,
     entry_rule: EntryRule,
@@ -768,7 +839,9 @@ def _finalize_trade(
         "return": total_return,
         "max_drawdown_during_trade": mdd,
         "max_favorable_excursion": mfe,
-        "missed_return_before_entry": float(entry_row["relative_return"]),
+        "missed_return_before_entry": float(trade_state.get("missed_return_before_entry", 0.0)),
+        "time_to_entry_days": int(trade_state.get("time_to_entry_days", 0)),
+        "time_to_entry_windows": int(trade_state.get("time_to_entry_windows", 0)),
         "coherence_at_entry": float(entry_row["coherence"]),
         "breadth_at_entry": float(entry_row["breadth"]),
         "volume_expansion_at_entry": float(entry_row["volume_expansion"]),
@@ -863,19 +936,10 @@ def _build_early_capture_metrics(trade_log_df: pd.DataFrame) -> pd.DataFrame:
             avg_return_after_entry=("return", "mean"),
             false_confirmation_rate=("return", lambda series: float((series <= 0).mean())),
             avg_holding_days=("holding_days", "mean"),
+            avg_time_from_birth_to_entry=("time_to_entry_days", "mean"),
+            median_time_from_birth_to_entry=("time_to_entry_days", "median"),
         )
     )
-    summary["avg_time_from_birth_to_entry"] = summary["entry_standard"].map(
-        {
-            "Birth Entry": 0.0,
-            "Emergence Entry": 1.0,
-            "15m Confirmation": 2.0,
-            "Cross-resolution Confirmation": 3.0,
-            "Expansion Entry": 3.0,
-            "Rotation-in Entry": 2.0,
-        }
-    )
-    summary["median_time_from_birth_to_entry"] = summary["avg_time_from_birth_to_entry"]
     return summary[
         [
             "entry_standard",
@@ -892,28 +956,80 @@ def _build_early_capture_metrics(trade_log_df: pd.DataFrame) -> pd.DataFrame:
 def _build_exit_effectiveness_metrics(trade_log_df: pd.DataFrame) -> pd.DataFrame:
     if trade_log_df.empty:
         return pd.DataFrame()
+    closed = trade_log_df[~trade_log_df["is_open_trade"]].copy()
+    if closed.empty:
+        return pd.DataFrame()
     summary = (
-        trade_log_df.groupby("exit_standard", as_index=False)
+        closed.groupby("exit_standard", as_index=False)
         .agg(
             avg_saved_drawdown=("max_drawdown_during_trade", lambda series: float(-series.mean())),
-            false_exit_rate=("is_open_trade", lambda series: float(series.mean())),
+            false_exit_rate=("return_after_exit_3d", lambda series: float((series > 0).mean())),
             avg_exit_delay_from_peak=("holding_days", "mean"),
             avg_return=("return", "mean"),
+            avg_return_after_exit_1d=("return_after_exit_1d", "mean"),
+            avg_return_after_exit_3d=("return_after_exit_3d", "mean"),
+            avg_return_after_exit_5d=("return_after_exit_5d", "mean"),
+            avg_return_after_exit_10d=("return_after_exit_10d", "mean"),
+            avg_return_if_held_to_5d=("return_if_held_to_5d", "mean"),
+            avg_return_if_held_to_10d=("return_if_held_to_10d", "mean"),
+            avg_saved_drawdown_vs_hold_5d=("saved_drawdown_vs_hold_5d", "mean"),
         )
     )
-    summary["avg_return_after_exit_1d"] = math.nan
-    summary["avg_return_after_exit_3d"] = math.nan
     return summary[
         [
             "exit_standard",
             "avg_saved_drawdown",
             "avg_return_after_exit_1d",
             "avg_return_after_exit_3d",
+            "avg_return_after_exit_5d",
+            "avg_return_after_exit_10d",
+            "avg_return_if_held_to_5d",
+            "avg_return_if_held_to_10d",
+            "avg_saved_drawdown_vs_hold_5d",
             "false_exit_rate",
             "avg_exit_delay_from_peak",
             "avg_return",
         ]
     ]
+
+
+def _enrich_trade_log_post_exit_metrics(
+    trade_log_df: pd.DataFrame,
+    daily_returns: pd.DataFrame,
+    trade_dates: list[pd.Timestamp],
+) -> pd.DataFrame:
+    if trade_log_df.empty:
+        return trade_log_df
+    output = trade_log_df.copy()
+    date_lookup = {pd.Timestamp(date): idx for idx, date in enumerate(trade_dates)}
+    for horizon in [1, 3, 5, 10]:
+        output[f"return_after_exit_{horizon}d"] = math.nan
+    output["return_if_held_to_5d"] = math.nan
+    output["return_if_held_to_10d"] = math.nan
+    output["saved_drawdown_vs_hold_5d"] = math.nan
+
+    for idx, row in output.iterrows():
+        if bool(row["is_open_trade"]):
+            continue
+        exit_time = pd.Timestamp(row["exit_time"])
+        if exit_time not in date_lookup:
+            continue
+        members = [member for member in str(row["entry_members"]).split(",") if member]
+        exit_idx = date_lookup[exit_time]
+        for horizon in [1, 3, 5, 10]:
+            future_dates = trade_dates[exit_idx + 1 : exit_idx + 1 + horizon]
+            future_returns = [_basket_return(members, daily_returns, future_date) for future_date in future_dates]
+            curve = pd.Series(future_returns, dtype=float)
+            future_return = float((1.0 + curve.fillna(0.0)).prod() - 1.0) if not curve.empty else 0.0
+            output.at[idx, f"return_after_exit_{horizon}d"] = future_return
+            if horizon == 5:
+                output.at[idx, "return_if_held_to_5d"] = future_return
+                if not curve.empty:
+                    cumulative = (1.0 + curve.fillna(0.0)).cumprod()
+                    output.at[idx, "saved_drawdown_vs_hold_5d"] = float(-min((cumulative / cumulative.cummax() - 1.0).min(), 0.0))
+            if horizon == 10:
+                output.at[idx, "return_if_held_to_10d"] = future_return
+    return output
 
 
 def _build_confirmation_report(
@@ -928,6 +1044,7 @@ def _build_confirmation_report(
     trade_log_df: pd.DataFrame,
     strategy_count: int,
     signal_mode: str,
+    exit_lag_days: int,
 ) -> str:
     title = "# Confirmation Backtest v3 (Causal)" if signal_mode == "causal" else "# Confirmation Backtest v2 (Full Info)"
     lines = [
@@ -937,6 +1054,7 @@ def _build_confirmation_report(
         "",
         f"- Matrix: `6 Entry x 7 Exit x {len(HOLDING_POLICIES)} Holding = {strategy_count} strategies`",
         f"- Signal mode: `{signal_mode}`",
+        f"- Exit lag days: `{exit_lag_days}`",
         "- Baseline portfolio: `Top 3 themes`, equal-weight themes, equal-weight members",
         "- Cost assumption: `10 bps`",
         f"- Completed trades: `{len(trade_log_df)}`",

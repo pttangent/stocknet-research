@@ -22,6 +22,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--benchmark", default="SPY", help="Benchmark symbol for report context.")
     parser.add_argument("--top-themes", type=int, default=3, help="Number of active themes to hold.")
     parser.add_argument("--cost-bps", type=float, default=10.0, help="Per-turnover transaction cost assumption.")
+    parser.add_argument("--exit-lag-days", type=int, default=1, help="Number of trade days between exit signal and execution.")
     parser.add_argument(
         "--signal-mode",
         choices=["causal", "full_info"],
@@ -60,6 +61,7 @@ def main() -> int:
         top_themes=args.top_themes,
         transaction_cost_bps=args.cost_bps,
         signal_mode=args.signal_mode,
+        exit_lag_days=args.exit_lag_days,
     )
 
     run_context.write_validation(
@@ -68,6 +70,7 @@ def main() -> int:
             "top_themes": args.top_themes,
             "cost_bps": args.cost_bps,
             "signal_mode": args.signal_mode,
+            "exit_lag_days": args.exit_lag_days,
         }
     )
     run_context.write_artifacts(

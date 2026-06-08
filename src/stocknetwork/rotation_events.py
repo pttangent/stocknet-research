@@ -68,7 +68,10 @@ def build_rotation_outputs(
     )
 
     community_timeseries.to_csv(output_dir / "community_timeseries.csv", index=False)
+    community_timeseries.to_csv(output_dir / "community_timeseries_fullinfo.csv", index=False)
+    _causal_timeseries_view(community_timeseries).to_csv(output_dir / "community_timeseries_causal.csv", index=False)
     rotation_events.to_csv(output_dir / "rotation_events.csv", index=False)
+    rotation_events.to_csv(output_dir / "rotation_events_fullinfo.csv", index=False)
     report_path = output_dir / "rotation_score_report.md"
     report_path.write_text(_build_report(community_timeseries, rotation_events), encoding="utf-8")
     return {
@@ -380,6 +383,41 @@ def _build_report(community_timeseries: pd.DataFrame, rotation_events: pd.DataFr
             )
         )
     return "\n".join(lines) + "\n"
+
+
+def _causal_timeseries_view(frame: pd.DataFrame) -> pd.DataFrame:
+    if frame.empty:
+        return frame
+    blacklist_prefixes = ("future_",)
+    blacklist_columns = {
+        "edge_birth_rate",
+        "edge_birth_count",
+        "edge_death_rate",
+        "edge_death_count",
+        "member_outflow",
+        "rotation_in_score",
+        "rotation_out_score",
+        "stage",
+    }
+    keep_columns = [
+        column
+        for column in frame.columns
+        if not column.startswith(blacklist_prefixes) and column not in blacklist_columns
+    ]
+    keep_columns.extend(
+        [
+            "observable_stage",
+            "observed_member_outflow",
+            "observed_edge_birth_count",
+            "observed_edge_birth_rate",
+            "observed_edge_death_count",
+            "observed_edge_death_rate",
+            "causal_rotation_in_score",
+            "causal_rotation_out_score",
+        ]
+    )
+    ordered = [column for column in keep_columns if column in frame.columns]
+    return frame.loc[:, ordered].copy()
 
 
 def _load_snapshot_payloads(dataset_dir: Path, manifest: pd.DataFrame) -> dict[str, SnapshotPayload]:
