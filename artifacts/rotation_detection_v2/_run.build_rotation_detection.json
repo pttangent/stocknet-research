@@ -1,0 +1,20 @@
+{
+  "version": 1,
+  "stage": "build_rotation_detection",
+  "run_id": "build_rotation_detection_20260608_092517",
+  "started_at": "2026-06-08T09:25:17Z",
+  "output_dir": "D:\\DEV\\stocknetwork\\StockNet\\artifacts\\rotation_detection_v2",
+  "label": "",
+  "notes": "",
+  "parameters": {
+    "dataset_dir": "D:\\DEV\\stocknetwork\\StockNet\\artifacts\\graph_snapshots_final",
+    "output": "D:\\DEV\\stocknetwork\\StockNet\\artifacts\\rotation_detection_v2",
+    "multires_report": "D:\\DEV\\stocknetwork\\StockNet\\artifacts\\parquet_multi_res\\multi_resolution_report.json",
+    "min_community_size": 4,
+    "top_quantile": 0.8,
+    "run_id": "",
+    "run_label": "",
+    "run_notes": ""
+  },
+  "extra": {}
+}
