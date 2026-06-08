@@ -54,6 +54,7 @@ class CommunitySnapshot:
             "edge_density": round(self.edge_density, 4),
             "member_stability": round(self.member_stability, 4),
             "top_members": self.top_members,
+            "members": self.members,
         }
 
 

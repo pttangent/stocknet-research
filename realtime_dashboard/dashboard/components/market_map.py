@@ -53,6 +53,10 @@ def _prepare_latest_snapshots(snapshots_df: pd.DataFrame) -> tuple[pd.DataFrame,
     df = snapshots_df.copy()
     df["timestamp"] = pd.to_datetime(df["timestamp"])
     df["path_key"] = df["theme_path_id"].fillna(df["community_id"])
+    if "members" not in df.columns:
+        df["members"] = ""
+    if "top_members" not in df.columns:
+        df["top_members"] = ""
     df = df.sort_values(["path_key", "timestamp"])
 
     latest = df.groupby("path_key", as_index=False).tail(1).copy()
@@ -75,7 +79,8 @@ def _prepare_latest_snapshots(snapshots_df: pd.DataFrame) -> tuple[pd.DataFrame,
 
     latest["status_display"] = latest["status"].fillna("").replace("", "noise").str.lower()
     latest["bubble_size"] = latest["member_count"].clip(lower=4)
-    latest["hover_members"] = latest["top_members"].fillna(latest["members"].fillna(""))
+    latest["hover_members"] = latest["top_members"].fillna("").replace("", pd.NA)
+    latest["hover_members"] = latest["hover_members"].fillna(latest["members"].fillna(""))
     return latest, previous
 
 
@@ -148,6 +153,9 @@ def _render_bubble_chart(latest: pd.DataFrame, previous: pd.DataFrame) -> None:
 
 
 def _render_fast_movers(latest: pd.DataFrame, previous: pd.DataFrame) -> None:
+    if "coherence_delta" not in latest.columns:
+        latest = latest.copy()
+        latest["coherence_delta"] = 0.0
     movers = latest[[
         "path_key",
         "status_display",
