@@ -108,6 +108,8 @@ def prepare_theme_panel(rotation_dir: Path | str, signal_mode: str = "causal") -
     frame = _normalize_signal_columns(frame, signal_mode=signal_mode)
 
     frame = _add_daily_cross_sectional_scores(frame)
+    if signal_mode == "causal":
+        frame["cross_res_pct"] = 0.0
     frame = _assign_theme_paths(frame)
     frame = _add_lifecycle_rollups(frame)
     frame["theme_guess"] = frame["members_list"].apply(_theme_guess)
@@ -116,6 +118,11 @@ def prepare_theme_panel(rotation_dir: Path | str, signal_mode: str = "causal") -
         + 0.30 * frame["avg_community_confidence"].fillna(0.0)
         + 0.25 * frame["cross_resolution_support"].fillna(0.0)
     ).clip(0.0, 1.0)
+    if signal_mode == "causal":
+        frame["theme_confidence"] = (
+            0.60 * frame["coherence"].fillna(0.0)
+            + 0.40 * frame["avg_community_confidence"].fillna(0.0)
+        ).clip(0.0, 1.0)
     return frame
 
 
@@ -128,6 +135,7 @@ def _normalize_signal_columns(frame: pd.DataFrame, signal_mode: str) -> pd.DataF
         output = _derive_causal_columns(output)
         if "observed_member_outflow" not in output.columns and "member_count_delta" in output.columns:
             output["observed_member_outflow"] = (-output["member_count_delta"]).clip(lower=0.0)
+        output["cross_resolution_support"] = 0.0
         required = {
             "stage": "observable_stage",
             "rotation_in_score": "causal_rotation_in_score",
@@ -351,12 +359,16 @@ def _add_daily_cross_sectional_scores(frame: pd.DataFrame) -> pd.DataFrame:
     output["breadth_pct"] = grouped["breadth"].rank(method="average", pct=True)
     output["rel_strength_pct"] = grouped["relative_return"].rank(method="average", pct=True)
     output["edge_death_pct"] = grouped["edge_death_rate"].rank(method="average", pct=True)
+    cross_res_component = output["cross_res_pct"].fillna(0.0)
+    if "signal_mode" in output.columns and output["signal_mode"].eq("causal").all():
+        cross_res_component = 0.0
+        output["cross_res_pct"] = 0.0
     output["entry_rank_score"] = (
         0.35 * output["rotation_in_pct"].fillna(0.0)
         + 0.20 * output["rel_strength_pct"].fillna(0.0)
         + 0.15 * output["coherence_pct"].fillna(0.0)
         + 0.15 * output["breadth_pct"].fillna(0.0)
-        + 0.15 * output["cross_res_pct"].fillna(0.0)
+        + 0.15 * cross_res_component
     )
     return output
 
@@ -580,6 +592,7 @@ def _run_single_strategy(
 
 def _entry_signal(entry_rule: EntryRule, row: pd.Series) -> bool:
     stage = str(row.get("stage", "")).lower()
+    signal_mode = str(row.get("signal_mode", ""))
     if entry_rule.code == "E1":
         return stage in {"birth", "emergence"} and row["member_count"] >= 4 and row["coherence_pct"] >= 0.60 and row["edge_birth_pct"] >= 0.70
     if entry_rule.code == "E2":
@@ -587,6 +600,8 @@ def _entry_signal(entry_rule: EntryRule, row: pd.Series) -> bool:
     if entry_rule.code == "E3":
         return row["age"] >= 2 and stage in {"confirmation", "expansion", "maturity"}
     if entry_rule.code == "E4":
+        if signal_mode == "causal":
+            return False
         return row["age"] >= 2 and row["cross_res_pct"] >= 0.75
     if entry_rule.code == "E5":
         return stage == "expansion" and row["member_count_delta"] > 0 and row["breadth_pct"] >= 0.50 and row["relative_return"] > 0 and row["coherence_delta"] >= -0.02
