@@ -1,4 +1,4 @@
-"""Headless realtime scanner for 1m early radar and 15m confirmation."""
+"""Headless realtime scanner for 1m early radar with 5m and 15m confirmation."""
 
 from __future__ import annotations
 
@@ -54,6 +54,60 @@ def dataframe_to_records(df: pd.DataFrame, limit: int = 20) -> list[dict]:
     if df.empty:
         return []
     return df.head(limit).to_dict("records")
+
+
+def build_state_payload(
+    universe: str,
+    scan_mode: str,
+    symbols: int,
+    scan_number: int,
+    latest_1m_snapshots: pd.DataFrame,
+    alerts_1m: list,
+    latest_5m_snapshots: pd.DataFrame,
+    alerts_5m: list,
+    latest_15m_snapshots: pd.DataFrame,
+    alerts_15m: list,
+) -> dict:
+    return {
+        "run_id": f"{datetime.now(UTC):%Y%m%dT%H%M%SZ}_{universe}",
+        "scan_number": scan_number,
+        "generated_at": datetime.now(UTC).isoformat(),
+        "universe": universe,
+        "scan_mode": scan_mode,
+        "symbols": symbols,
+        "latest_1m_timestamp": (
+            str(latest_1m_snapshots["timestamp"].max()) if not latest_1m_snapshots.empty else None
+        ),
+        "latest_5m_timestamp": (
+            str(latest_5m_snapshots["timestamp"].max()) if not latest_5m_snapshots.empty else None
+        ),
+        "latest_15m_timestamp": (
+            str(latest_15m_snapshots["timestamp"].max()) if not latest_15m_snapshots.empty else None
+        ),
+        "one_minute": {
+            "community_count": int(len(latest_1m_snapshots)),
+            "alert_count": int(len(alerts_1m)),
+            "top_communities": dataframe_to_records(
+                latest_1m_snapshots.sort_values("radar_score", ascending=False), limit=10
+            ),
+        },
+        "five_minute": {
+            "enabled": True,
+            "community_count": int(len(latest_5m_snapshots)),
+            "alert_count": int(len(alerts_5m)),
+            "top_communities": dataframe_to_records(
+                latest_5m_snapshots.sort_values("radar_score", ascending=False), limit=10
+            ),
+        },
+        "fifteen_minute": {
+            "enabled": True,
+            "community_count": int(len(latest_15m_snapshots)),
+            "alert_count": int(len(alerts_15m)),
+            "top_communities": dataframe_to_records(
+                latest_15m_snapshots.sort_values("radar_score", ascending=False), limit=10
+            ),
+        },
+    }
 
 
 class FrequencyRuntime:
@@ -149,10 +203,13 @@ def main() -> None:
     state_writer = ScannerStateWriter(config.output)
 
     runtime_1m = FrequencyRuntime(config)
+    runtime_5m = FrequencyRuntime(config)
     runtime_15m = FrequencyRuntime(config)
 
     if not warmup_df.empty:
         runtime_1m.feature_engine.ingest_bars(warmup_df)
+        warmup_5m = aggregate_intraday(warmup_df, "5min")
+        runtime_5m.feature_engine.ingest_bars(warmup_5m)
         if args.enable_15m:
             warmup_15m = aggregate_intraday(warmup_df, "15min")
             runtime_15m.feature_engine.ingest_bars(warmup_15m)
@@ -186,6 +243,24 @@ def main() -> None:
         if alerts_1m:
             logger.log_alerts(pd.DataFrame([alert.to_dict() for alert in alerts_1m]))
 
+        latest_5m_snapshots = pd.DataFrame()
+        latest_5m_members = pd.DataFrame()
+        latest_5m_edges = pd.DataFrame()
+        alerts_5m = []
+        if not cached_1m.empty:
+            cached_5m = aggregate_intraday(cached_1m, "5min")
+            latest_5m_snapshots, latest_5m_members, latest_5m_edges, alerts_5m = process_frequency(
+                runtime_5m,
+                cached_5m,
+                "5m",
+            )
+            if not latest_5m_snapshots.empty:
+                logger.log_snapshots(latest_5m_snapshots)
+                logger.log_members(latest_5m_members)
+                logger.log_edges(latest_5m_edges, resolve_scan_timestamp(cached_5m))
+            if alerts_5m:
+                logger.log_alerts(pd.DataFrame([alert.to_dict() for alert in alerts_5m]))
+
         latest_15m_snapshots = pd.DataFrame()
         latest_15m_members = pd.DataFrame()
         latest_15m_edges = pd.DataFrame()
@@ -204,41 +279,25 @@ def main() -> None:
             if alerts_15m:
                 logger.log_alerts(pd.DataFrame([alert.to_dict() for alert in alerts_15m]))
 
-        payload = {
-            "run_id": f"{datetime.now(UTC):%Y%m%dT%H%M%SZ}_{args.universe}",
-            "scan_number": scan_number,
-            "generated_at": datetime.now(UTC).isoformat(),
-            "universe": args.universe,
-            "scan_mode": args.scan_mode,
-            "symbols": len(symbols),
-            "latest_1m_timestamp": (
-                str(latest_1m_snapshots["timestamp"].max()) if not latest_1m_snapshots.empty else None
-            ),
-            "latest_15m_timestamp": (
-                str(latest_15m_snapshots["timestamp"].max()) if not latest_15m_snapshots.empty else None
-            ),
-            "one_minute": {
-                "community_count": int(len(latest_1m_snapshots)),
-                "alert_count": int(len(alerts_1m)),
-                "top_communities": dataframe_to_records(
-                    latest_1m_snapshots.sort_values("radar_score", ascending=False), limit=10
-                ),
-            },
-            "fifteen_minute": {
-                "enabled": bool(args.enable_15m),
-                "community_count": int(len(latest_15m_snapshots)),
-                "alert_count": int(len(alerts_15m)),
-                "top_communities": dataframe_to_records(
-                    latest_15m_snapshots.sort_values("radar_score", ascending=False), limit=10
-                ),
-            },
-        }
+        payload = build_state_payload(
+            universe=args.universe,
+            scan_mode=args.scan_mode,
+            symbols=len(symbols),
+            scan_number=scan_number,
+            latest_1m_snapshots=latest_1m_snapshots,
+            alerts_1m=alerts_1m,
+            latest_5m_snapshots=latest_5m_snapshots,
+            alerts_5m=alerts_5m,
+            latest_15m_snapshots=latest_15m_snapshots,
+            alerts_15m=alerts_15m,
+        )
         state_writer.write_json("current_state.json", payload)
         state_writer.write_json(
             "latest_alerts.json",
             {
                 "generated_at": payload["generated_at"],
                 "alerts_1m": [alert.to_dict() for alert in alerts_1m],
+                "alerts_5m": [alert.to_dict() for alert in alerts_5m],
                 "alerts_15m": [alert.to_dict() for alert in alerts_15m],
             },
         )
@@ -246,8 +305,11 @@ def main() -> None:
         print(json.dumps({
             "scan_number": scan_number,
             "latest_1m_timestamp": payload["latest_1m_timestamp"],
+            "latest_5m_timestamp": payload["latest_5m_timestamp"],
             "one_minute_communities": payload["one_minute"]["community_count"],
             "one_minute_alerts": payload["one_minute"]["alert_count"],
+            "five_minute_communities": payload["five_minute"]["community_count"],
+            "five_minute_alerts": payload["five_minute"]["alert_count"],
             "fifteen_minute_communities": payload["fifteen_minute"]["community_count"],
             "fifteen_minute_alerts": payload["fifteen_minute"]["alert_count"],
         }, ensure_ascii=False))

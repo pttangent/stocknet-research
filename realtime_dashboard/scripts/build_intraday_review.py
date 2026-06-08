@@ -54,6 +54,15 @@ def build_review(
         "",
     ]
 
+    if not snapshots.empty and "frequency" in snapshots.columns:
+        freq_counts = snapshots.groupby("frequency")["community_id"].nunique().to_dict()
+        lines.extend([
+            f"- **1m Active Communities**: {int(freq_counts.get('1m', 0))}",
+            f"- **5m Active Communities**: {int(freq_counts.get('5m', 0))}",
+            f"- **15m Active Communities**: {int(freq_counts.get('15m', 0))}",
+            "",
+        ])
+
     # Community evolution
     if not snapshots.empty and "level" in snapshots.columns:
         max_levels = snapshots.groupby("community_id")["level"].max()
@@ -120,7 +129,7 @@ def build_review(
             lines.extend([
                 "## Lead Time Analysis",
                 "",
-                f"- **Average Lead Time**: {lead_df['lead_time_min'].mean():.1f} min",
+                f"- **Average Lead Time (1m -> 15m)**: {lead_df['lead_time_min'].mean():.1f} min",
                 f"- **Max Lead Time**: {lead_df['lead_time_min'].max():.1f} min",
                 f"- **Min Lead Time**: {lead_df['lead_time_min'].min():.1f} min",
                 "",

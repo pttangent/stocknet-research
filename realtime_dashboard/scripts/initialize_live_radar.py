@@ -1,4 +1,4 @@
-"""Initialize recent 1m history, aggregate to 15m, and verify scanner readiness."""
+"""Initialize recent 1m history, aggregate to 5m/15m, and verify scanner readiness."""
 
 from __future__ import annotations
 
@@ -129,16 +129,19 @@ def main() -> None:
     if one_minute.empty:
         raise RuntimeError("Failed to fetch recent 1m history from Yahoo.")
 
+    five_minute = aggregate_intraday(one_minute, "5min")
     fifteen_minute = aggregate_intraday(one_minute, "15min")
 
     archive_writer = OneMinuteArchiveWriter(config.output)
     archive_writer.append_bars(one_minute, provider="yahoo", interval="1m")
 
     warmup_1m_dir = config.data_source.historical_parquet_dir
+    warmup_5m_dir = os.path.join(config.output.base_dir, "warmup_5m")
     warmup_15m_dir = os.path.join(config.output.base_dir, "warmup_15m")
     archive_15m_dir = os.path.join(config.output.base_dir, "archive_15m_from_1m")
 
     PartitionedParquetWriter(warmup_1m_dir).write(one_minute)
+    PartitionedParquetWriter(warmup_5m_dir).write(five_minute)
     PartitionedParquetWriter(warmup_15m_dir).write(fifteen_minute)
     PartitionedParquetWriter(archive_15m_dir).write(fifteen_minute)
 
@@ -148,9 +151,11 @@ def main() -> None:
         "symbols_loaded": len(symbols),
         "symbols_excluded": len(excluded),
         "warmup_1m_dir": warmup_1m_dir,
+        "warmup_5m_dir": warmup_5m_dir,
         "warmup_15m_dir": warmup_15m_dir,
         "archive_15m_dir": archive_15m_dir,
         "one_minute": verify_pipeline(config, one_minute, "1m"),
+        "five_minute": verify_pipeline(config, five_minute, "5m"),
         "fifteen_minute": verify_pipeline(config, fifteen_minute, "15m"),
     }
 

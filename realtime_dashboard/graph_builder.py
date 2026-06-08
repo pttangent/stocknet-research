@@ -110,7 +110,7 @@ class GraphBuilder:
                 ret_i = ret_i[-min_len:]
                 ret_j = ret_j[-min_len:]
 
-                return_corr = np.corrcoef(ret_i, ret_j)[0, 1]
+                return_corr = self._safe_corrcoef(ret_i, ret_j)
                 if np.isnan(return_corr):
                     continue
 
@@ -120,7 +120,7 @@ class GraphBuilder:
                     vol_i = df[df["symbol"] == sym_list[i]]["volume"].values[-min_len:]
                     vol_j = df[df["symbol"] == sym_list[j]]["volume"].values[-min_len:]
                     if len(vol_i) >= 3 and len(vol_j) >= 3:
-                        vcorr = np.corrcoef(vol_i, vol_j)[0, 1]
+                        vcorr = self._safe_corrcoef(vol_i, vol_j)
                         vol_corr = 0.0 if np.isnan(vcorr) else vcorr
 
                 # Directional agreement
@@ -206,3 +206,16 @@ class GraphBuilder:
 
     def get_last_edges(self) -> Optional[pd.DataFrame]:
         return self._last_edges
+
+    @staticmethod
+    def _safe_corrcoef(left: np.ndarray, right: np.ndarray) -> float:
+        """Return a stable correlation value without noisy numpy warnings."""
+        if len(left) < 3 or len(right) < 3:
+            return float("nan")
+        if not np.all(np.isfinite(left)) or not np.all(np.isfinite(right)):
+            return float("nan")
+        left_std = float(np.std(left))
+        right_std = float(np.std(right))
+        if left_std == 0.0 or right_std == 0.0:
+            return float("nan")
+        return float(np.corrcoef(left, right)[0, 1])

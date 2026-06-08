@@ -75,6 +75,7 @@ class HistoricalParquetFeed(DataFeed):
     def load_symbols(self, symbols: List[str]) -> pd.DataFrame:
         """Load historical data for given symbols from partitioned parquet."""
         all_data = []
+        missing_symbols = []
         for sym in symbols:
             sym_norm = sym.replace("-", ".")  # Yahoo normalization reverse
             path = os.path.join(self.parquet_dir, f"symbol={sym_norm}")
@@ -82,7 +83,7 @@ class HistoricalParquetFeed(DataFeed):
                 # Try without normalization
                 path = os.path.join(self.parquet_dir, f"symbol={sym}")
             if not os.path.exists(path):
-                logger.warning(f"No parquet data for {sym} at {path}")
+                missing_symbols.append(sym)
                 continue
             try:
                 df = pd.read_parquet(path)
@@ -90,6 +91,17 @@ class HistoricalParquetFeed(DataFeed):
                 all_data.append(df)
             except Exception as e:
                 logger.warning(f"Failed to read {sym}: {e}")
+
+        if missing_symbols:
+            preview = ",".join(missing_symbols[:10])
+            suffix = "" if len(missing_symbols) <= 10 else f" ... +{len(missing_symbols) - 10} more"
+            logger.warning(
+                "Missing warmup parquet for %s symbols under %s: %s%s",
+                len(missing_symbols),
+                self.parquet_dir,
+                preview,
+                suffix,
+            )
 
         if all_data:
             self._df = pd.concat(all_data, ignore_index=True)
@@ -185,10 +197,14 @@ class YahooFinanceLiveFeed(DataFeed):
         self._bar_cache: Dict[str, pd.DataFrame] = {}
         self._chunk_index: int = 0
         self._all_symbols: List[str] = []
+        self._invalid_symbols: set[str] = set()
 
     def set_symbols(self, symbols: List[str]):
         """Set the full universe to scan."""
-        self._all_symbols = list(dict.fromkeys(symbols))  # dedupe preserve order
+        self._all_symbols = [
+            sym for sym in list(dict.fromkeys(symbols))
+            if sym not in self._invalid_symbols
+        ]
 
     def _get_next_chunk(self) -> List[str]:
         """Get the next chunk of symbols for round-robin fetching."""
@@ -243,6 +259,8 @@ class YahooFinanceLiveFeed(DataFeed):
                 with urllib.request.urlopen(request, timeout=self.timeout) as response:
                     return json.loads(response.read().decode("utf-8"))
             except urllib.error.HTTPError as exc:
+                if exc.code == 422:
+                    raise ValueError(f"HTTP 422 unsupported symbol or interval: {exc.reason}")
                 if exc.code in {429, 500, 502, 503, 504} and attempt < self.retries:
                     time.sleep(0.5 * attempt)
                     continue
@@ -347,10 +365,12 @@ class YahooFinanceLiveFeed(DataFeed):
         days = lookback_days or self.lookback_days
         range_value = self._range_from_interval(fetch_interval, days)
         all_data = []
+        skipped = 0
         with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
             futures = {
                 executor.submit(self._fetch_symbol, sym, range_value, fetch_interval): sym
                 for sym in symbols
+                if sym not in self._invalid_symbols
             }
             for future in as_completed(futures):
                 sym = futures[future]
@@ -359,7 +379,14 @@ class YahooFinanceLiveFeed(DataFeed):
                     if not df.empty:
                         all_data.append(df)
                 except Exception as exc:
-                    logger.warning("Failed recent history fetch for %s: %s", sym, exc)
+                    if isinstance(exc, ValueError) and "HTTP 422" in str(exc):
+                        self._invalid_symbols.add(sym)
+                        skipped += 1
+                        logger.warning("Skipping unsupported Yahoo symbol for recent history: %s", sym)
+                    else:
+                        logger.warning("Failed recent history fetch for %s: %s", sym, exc)
+        if skipped:
+            self._all_symbols = [sym for sym in self._all_symbols if sym not in self._invalid_symbols]
         if all_data:
             combined = pd.concat(all_data, ignore_index=True)
             combined["timestamp"] = pd.to_datetime(combined["timestamp"], utc=True)
@@ -382,7 +409,11 @@ class YahooFinanceLiveFeed(DataFeed):
         new_bars_count = 0
 
         with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
-            futures = {executor.submit(self._fetch_symbol, sym): sym for sym in chunk}
+            futures = {
+                executor.submit(self._fetch_symbol, sym): sym
+                for sym in chunk
+                if sym not in self._invalid_symbols
+            }
             for future in as_completed(futures):
                 sym = futures[future]
                 try:
@@ -425,8 +456,13 @@ class YahooFinanceLiveFeed(DataFeed):
                     self._last_fetch[sym] = curr_ts
 
                 except Exception as e:
-                    errors.append(f"{sym}: {e}")
-                    logger.warning(f"Failed to fetch {sym}: {e}")
+                    if isinstance(e, ValueError) and "HTTP 422" in str(e):
+                        self._invalid_symbols.add(sym)
+                        self._all_symbols = [symbol for symbol in self._all_symbols if symbol != sym]
+                        logger.warning("Skipping unsupported Yahoo symbol in live scan: %s", sym)
+                    else:
+                        errors.append(f"{sym}: {e}")
+                        logger.warning(f"Failed to fetch {sym}: {e}")
 
         if errors and len(errors) > len(chunk) * 0.3:
             logger.error(f"High error rate: {len(errors)}/{len(chunk)} symbols failed")
