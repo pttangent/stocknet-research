@@ -13,6 +13,7 @@ import json
 import logging
 import time
 import os
+import math
 
 logger = logging.getLogger(__name__)
 
@@ -214,16 +215,16 @@ class YahooFinanceLiveFeed(DataFeed):
         total = (len(self._all_symbols) + self.chunk_size - 1) // self.chunk_size
         return self._chunk_index, total
 
-    def _build_url(self, symbol: str) -> str:
+    def _build_url(self, symbol: str, range_value: Optional[str] = None, interval: Optional[str] = None) -> str:
         params = {
-            "interval": self.interval,
+            "interval": interval or self.interval,
             "includePrePost": "false",
             "events": "div,splits",
             "lang": "en-US",
             "region": "US",
         }
         # For live intraday polling, fetch today's bars only (fastest, most accurate)
-        params["range"] = "1d"
+        params["range"] = range_value or "1d"
         query = urllib.parse.urlencode(params)
         return f"{YAHOO_CHART_BASE_URL}{urllib.parse.quote(symbol)}?{query}"
 
@@ -311,12 +312,59 @@ class YahooFinanceLiveFeed(DataFeed):
 
         return pd.DataFrame(rows)
 
-    def _fetch_symbol(self, symbol: str) -> pd.DataFrame:
+    def _fetch_symbol(
+        self,
+        symbol: str,
+        range_value: Optional[str] = None,
+        interval: Optional[str] = None,
+    ) -> pd.DataFrame:
         """Fetch latest bars for a single symbol."""
-        url = self._build_url(symbol)
+        url = self._build_url(symbol, range_value=range_value, interval=interval)
         payload = self._fetch_json(url)
         df = self._parse_payload(symbol, payload)
         return df
+
+    def _range_from_interval(self, interval: str, lookback_days: int) -> str:
+        if interval == "1m":
+            return f"{max(1, min(lookback_days, 7))}d"
+        if interval in {"2m", "5m", "15m", "30m", "60m", "90m", "1h"}:
+            capped = max(1, min(lookback_days, 60))
+            if capped <= 5:
+                return f"{capped}d"
+            if capped <= 30:
+                return "1mo"
+            return "2mo"
+        return "6mo"
+
+    def fetch_recent_history(
+        self,
+        symbols: List[str],
+        interval: Optional[str] = None,
+        lookback_days: Optional[int] = None,
+    ) -> pd.DataFrame:
+        """Fetch the latest Yahoo-supported history window for the given interval."""
+        fetch_interval = interval or self.interval
+        days = lookback_days or self.lookback_days
+        range_value = self._range_from_interval(fetch_interval, days)
+        all_data = []
+        with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
+            futures = {
+                executor.submit(self._fetch_symbol, sym, range_value, fetch_interval): sym
+                for sym in symbols
+            }
+            for future in as_completed(futures):
+                sym = futures[future]
+                try:
+                    df = future.result()
+                    if not df.empty:
+                        all_data.append(df)
+                except Exception as exc:
+                    logger.warning("Failed recent history fetch for %s: %s", sym, exc)
+        if all_data:
+            combined = pd.concat(all_data, ignore_index=True)
+            combined["timestamp"] = pd.to_datetime(combined["timestamp"], utc=True)
+            return combined.sort_values(["symbol", "timestamp"]).reset_index(drop=True)
+        return pd.DataFrame()
 
     def get_latest_bars(self, symbols: Optional[List[str]] = None) -> List[Bar]:
         """Fetch latest complete bars for the next chunk of symbols (round-robin)."""
@@ -431,20 +479,12 @@ class YahooFinanceLiveFeed(DataFeed):
         end: datetime,
     ) -> pd.DataFrame:
         """Fetch historical bars for warm-up."""
-        all_data = []
-        for sym in symbols:
-            try:
-                df = self._fetch_symbol(sym)
-                if not df.empty:
-                    mask = (df["timestamp"] >= start) & (df["timestamp"] <= end)
-                    all_data.append(df[mask])
-            except Exception as e:
-                logger.warning(f"Failed to fetch history for {sym}: {e}")
-            time.sleep(self.rate_limit_delay)
-
-        if all_data:
-            return pd.concat(all_data, ignore_index=True)
-        return pd.DataFrame()
+        lookback_days = max(1, math.ceil((end - start).total_seconds() / 86400))
+        df = self.fetch_recent_history(symbols, interval=self.interval, lookback_days=lookback_days)
+        if df.empty:
+            return df
+        mask = (df["timestamp"] >= start) & (df["timestamp"] <= end)
+        return df.loc[mask].copy()
 
     def get_cached_bars(self, symbol: str) -> pd.DataFrame:
         """Get cached bar history for a symbol."""

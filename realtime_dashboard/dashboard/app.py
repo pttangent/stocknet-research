@@ -65,8 +65,10 @@ st.markdown("""
 
 # Session State Initialization
 def init_session_state():
+    default_mode = os.environ.get("STOCKNET_RADAR_MODE", "live")
+    historical_dir_override = os.environ.get("STOCKNET_RADAR_HISTORICAL_DIR", "").strip()
     defaults = {
-        "config": RadarConfig(mode="live"),
+        "config": RadarConfig(mode=default_mode),
         "feed": None,
         "historical_feed": None,
         "feature_engine": None,
@@ -94,6 +96,9 @@ def init_session_state():
     for key, val in defaults.items():
         if key not in st.session_state:
             st.session_state[key] = val
+
+    if historical_dir_override:
+        st.session_state.config.data_source.historical_parquet_dir = historical_dir_override
 
 
 @st.cache_resource

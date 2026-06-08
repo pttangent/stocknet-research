@@ -187,3 +187,32 @@ class OneMinuteArchiveWriter:
             combined.to_csv(path, index=False)
         else:
             manifest_row.to_csv(path, index=False)
+
+
+class PartitionedParquetWriter:
+    """Write symbol-partitioned parquet files compatible with HistoricalParquetFeed."""
+
+    def __init__(self, root_dir: str):
+        self.root_dir = root_dir
+        os.makedirs(self.root_dir, exist_ok=True)
+
+    def write(self, bars_df: pd.DataFrame) -> int:
+        if bars_df.empty:
+            return 0
+
+        df = bars_df.copy()
+        df["timestamp"] = pd.to_datetime(df["timestamp"], utc=True)
+        rows_written = 0
+        for symbol, group in df.groupby("symbol", sort=True):
+            target_dir = os.path.join(self.root_dir, f"symbol={symbol}")
+            os.makedirs(target_dir, exist_ok=True)
+            target_path = os.path.join(target_dir, "part-000.parquet")
+            payload = group.sort_values("timestamp")
+            if os.path.exists(target_path):
+                existing = pd.read_parquet(target_path)
+                payload = pd.concat([existing, payload], ignore_index=True)
+                payload = payload.sort_values("timestamp")
+                payload = payload.drop_duplicates(subset=["timestamp"], keep="last")
+            payload.to_parquet(target_path, index=False)
+            rows_written += len(group)
+        return rows_written

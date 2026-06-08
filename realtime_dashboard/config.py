@@ -169,7 +169,10 @@ class DataSourceConfig:
     chunk_size: int = 200    # Symbols per scan (round-robin for large universes)
     # Historical parquet for warm-up
     historical_parquet_dir: str = field(default_factory=lambda: os.path.join(
-        _STOCKNET_DIR, "artifacts", "parquet_5m_final"
+        _MODULE_DIR, "data", "warmup_1m"
+    ))
+    universe_manifest_dir: str = field(default_factory=lambda: os.path.join(
+        _STOCKNET_DIR, "artifacts", "parquet_15m"
     ))
     use_historical_warmup: bool = True
     warmup_lookback_bars: int = 100  # Number of historical bars to preload

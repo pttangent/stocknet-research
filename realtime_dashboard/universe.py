@@ -113,12 +113,12 @@ def build_symbol_universe(
     """Build the monitoring universe and return (symbols, excluded_symbols)."""
     ds = config.data_source
     if universe == "full_market":
-        manifest_path = os.path.join(ds.historical_parquet_dir, "_manifest.csv")
+        manifest_path = os.path.join(ds.universe_manifest_dir, "_manifest.csv")
         symbols = load_symbols_from_manifest(manifest_path)
         if not symbols:
             symbols = list(config.universe.custom_watchlist)
     elif universe == "core_500":
-        manifest_path = os.path.join(ds.historical_parquet_dir, "_manifest.csv")
+        manifest_path = os.path.join(ds.universe_manifest_dir, "_manifest.csv")
         symbols = load_symbols_from_manifest(manifest_path)[: config.universe.core_pool_size]
         if not symbols:
             symbols = list(config.universe.custom_watchlist)
