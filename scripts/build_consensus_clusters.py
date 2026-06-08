@@ -22,7 +22,7 @@ if str(SRC) not in sys.path:
 
 from stocknetwork.consensus_clustering import bootstrap_consensus
 from stocknetwork.gpu_graph import leiden_communities, run_gpu_graph_pipeline
-from stocknetwork.null_models import compute_null_pvalues, label_shuffle_null, time_shuffle_null
+from stocknetwork.null_models import community_metric_summary, compute_null_pvalues, label_shuffle_null, time_shuffle_null
 from stocknetwork.run_metadata import create_run_context
 
 
@@ -186,22 +186,27 @@ def main() -> int:
     )
 
     # Compute p-values
-    real_persistence = _community_persistence_score(single_result["communities"])
-    pvalues = compute_null_pvalues(real_persistence, {
-        "time_shuffle": null_time["persistence_scores"],
-        "label_shuffle": null_label["persistence_scores"],
+    real_metrics = community_metric_summary(single_result["communities"], single_result["adjacency"], universe)
+    metric_pvalues = compute_null_pvalues(real_metrics, {
+        "time_shuffle": null_time["metric_rows"],
+        "label_shuffle": null_label["metric_rows"],
     })
-    print(f"  Real persistence: {real_persistence:.2f}")
-    print(f"  p-values: {pvalues}")
+    real_persistence = real_metrics["structure_score"]
+    print(f"  Real structure score: {real_persistence:.4f}")
+    print(f"  p-values: {metric_pvalues}")
 
     # --- Save outputs ---
     # 1. Single-run communities
     community_rows: list[dict[str, Any]] = []
     for ci, comm in enumerate(single_result["communities"]):
+        comm_metrics = community_metric_summary([comm], single_result["adjacency"], universe)
         community_rows.append({
             "community_id": f"single_{ci:03d}",
             "members": ",".join(sorted(comm)),
             "size": len(comm),
+            "mean_internal_coherence": comm_metrics["mean_internal_coherence"],
+            "mean_member_confidence": comm_metrics["mean_member_confidence"],
+            "structure_score": comm_metrics["structure_score"],
             "type": "single_run",
         })
     for ci, comm in enumerate(consensus_result["consensus_communities"]):
@@ -214,6 +219,24 @@ def main() -> int:
         })
     pd.DataFrame(community_rows).to_csv(output_dir / "consensus_communities.csv", index=False)
 
+    null_time_structure = [float(row["structure_score"]) for row in null_time["metric_rows"]]
+    null_label_structure = [float(row["structure_score"]) for row in null_label["metric_rows"]]
+    significance_rows: list[dict[str, Any]] = []
+    for ci, comm in enumerate(single_result["communities"]):
+        comm_metrics = community_metric_summary([comm], single_result["adjacency"], universe)
+        time_percentile = _percentile(comm_metrics["structure_score"], null_time_structure)
+        label_percentile = _percentile(comm_metrics["structure_score"], null_label_structure)
+        significance_rows.append({
+            "community_id": f"single_{ci:03d}",
+            "size": len(comm),
+            "mean_internal_coherence": comm_metrics["mean_internal_coherence"],
+            "mean_member_confidence": comm_metrics["mean_member_confidence"],
+            "structure_score": comm_metrics["structure_score"],
+            "time_shuffle_percentile": time_percentile,
+            "label_shuffle_percentile": label_percentile,
+        })
+    pd.DataFrame(significance_rows).to_csv(output_dir / "community_significance.csv", index=False)
+
     # 2. Co-membership matrix
     co_membership = consensus_result["co_membership"]
     np.save(output_dir / "co_membership.npy", co_membership)
@@ -222,9 +245,12 @@ def main() -> int:
     with open(output_dir / "null_scores.json", "w") as f:
         json.dump({
             "real_persistence": real_persistence,
+            "real_metrics": real_metrics,
             "null_time_shuffle": null_time["persistence_scores"],
             "null_label_shuffle": null_label["persistence_scores"],
-            "pvalues": pvalues,
+            "null_time_shuffle_metrics": null_time["metric_rows"],
+            "null_label_shuffle_metrics": null_label["metric_rows"],
+            "pvalues": metric_pvalues,
         }, f, indent=2)
 
     # 4. Summary
@@ -234,31 +260,34 @@ def main() -> int:
         "single_communities": single_result["num_communities"],
         "consensus_communities": len(consensus_result["consensus_communities"]),
         "real_persistence": real_persistence,
-        "pvalue_time_shuffle": pvalues.get("time_shuffle", 1.0),
-        "pvalue_label_shuffle": pvalues.get("label_shuffle", 1.0),
+        "real_structure_score": real_metrics["structure_score"],
+        "real_mean_internal_coherence": real_metrics["mean_internal_coherence"],
+        "real_node_coverage": real_metrics["node_coverage"],
+        "pvalue_time_shuffle": metric_pvalues.get("time_shuffle", {}).get("structure_score", 1.0),
+        "pvalue_label_shuffle": metric_pvalues.get("label_shuffle", {}).get("structure_score", 1.0),
         "backend": single_result["backend"],
     })
     run_context.write_artifacts({
         "consensus_communities_csv": output_dir / "consensus_communities.csv",
+        "community_significance_csv": output_dir / "community_significance.csv",
         "co_membership_npy": output_dir / "co_membership.npy",
         "null_scores_json": output_dir / "null_scores.json",
     })
     run_context.write_summary({
         "status": "completed",
         "consensus_communities": len(consensus_result["consensus_communities"]),
-        "pvalue_time_shuffle": pvalues.get("time_shuffle", 1.0),
-        "pvalue_label_shuffle": pvalues.get("label_shuffle", 1.0),
+        "pvalue_time_shuffle": metric_pvalues.get("time_shuffle", {}).get("structure_score", 1.0),
+        "pvalue_label_shuffle": metric_pvalues.get("label_shuffle", {}).get("structure_score", 1.0),
         "output_dir": str(output_dir),
     })
     print(f"Consensus clustering complete. Output: {output_dir}")
     return 0
 
 
-def _community_persistence_score(communities: list[set[str]]) -> float:
-    if not communities:
+def _percentile(value: float, distribution: list[float]) -> float:
+    if not distribution:
         return 0.0
-    scores = [len(comm) for comm in communities if len(comm) >= 2]
-    return float(np.mean(scores)) if scores else 0.0
+    return float(sum(1 for item in distribution if item <= value) / len(distribution))
 
 
 if __name__ == "__main__":

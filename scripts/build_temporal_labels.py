@@ -55,9 +55,13 @@ def main() -> int:
     run_context.write_artifacts(
         {
             "edge_labels_csv": dataset_dir / "edge_labels.csv",
+            "edge_emergence_labels_csv": dataset_dir / "edge_emergence_labels.csv",
             "node_migration_labels_csv": dataset_dir / "node_migration_labels.csv",
             "community_labels_csv": dataset_dir / "community_labels.csv",
             "lifecycle_labels_csv": dataset_dir / "lifecycle_labels.csv",
+            "lifecycle_communities_csv": dataset_dir / "lifecycle_communities.csv",
+            "lifecycle_events_csv": dataset_dir / "lifecycle_events.csv",
+            "node_membership_timeline_csv": dataset_dir / "node_membership_timeline.csv",
         }
     )
     run_context.write_summary({"status": "completed", **result})
