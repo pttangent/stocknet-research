@@ -212,6 +212,10 @@ Deliverables:
 - `Multi-resolution Explorer`
 - `Validation Panel`
 - `Model Interpretation Panel`
+- `Case Review Dashboard`
+- `Trade Explanation Page`
+- `Community Interpretation Page`
+- `News Review Panel`
 
 Acceptance criteria:
 
@@ -226,7 +230,79 @@ Notes:
 - dashboard shell and several APIs exist
 - community-detail and lifecycle-level observation views are still missing
 
-## Phase 9: Final Research Report
+## Phase 9: Confirmation Backtest v1
+
+Goal:
+
+- compare theme entry, exit, and holding rules with both performance and interpretability outputs
+
+Main matrix:
+
+- `6 Entry Standards x 7 Exit Standards x 6 Holding Policies = 252 strategies`
+
+Deliverables:
+
+- `artifacts/confirmation_backtest/entry_exit_holding_results.csv`
+- `artifacts/confirmation_backtest/trade_log.csv`
+- `artifacts/confirmation_backtest/strategy_leaderboard.csv`
+- `artifacts/confirmation_backtest/entry_standard_summary.csv`
+- `artifacts/confirmation_backtest/exit_standard_summary.csv`
+- `artifacts/confirmation_backtest/holding_policy_summary.csv`
+- `artifacts/confirmation_backtest/early_capture_metrics.csv`
+- `artifacts/confirmation_backtest/exit_effectiveness_metrics.csv`
+- `artifacts/confirmation_backtest/long_cycle_theme_cases.csv`
+- `artifacts/confirmation_backtest/open_trades.csv`
+- `artifacts/confirmation_backtest/confirmation_standard_report.md`
+
+Acceptance criteria:
+
+- all `252` combinations run under a consistent baseline configuration
+- every strategy emits both trade-level and aggregate metrics
+- event-driven and minimum-hold policies are compared against fixed-horizon baselines
+- the report answers whether long-cycle themes can be retained by signal-based holding
+
+Status:
+
+- `Not Yet Integrated`
+
+Notes:
+
+- this phase upgrades the project from simple fixed-horizon theme testing to policy-level structure capture
+- the strongest comparison is expected to be early-entry vs confirmation-entry and fixed-hold vs event-driven-hold
+
+## Phase 10: Post-hoc Interpretation, News Validation, and Case Supervision
+
+Goal:
+
+- ensure every backtest output can be explained, audited, and manually reviewed after the fact
+
+Deliverables:
+
+- `artifacts/confirmation_backtest/trade_log_detailed.csv`
+- `artifacts/confirmation_backtest/community_interpretation.csv`
+- `artifacts/confirmation_backtest/case_supervision_queue.csv`
+- `artifacts/confirmation_backtest/news_validation_cases.csv`
+- `artifacts/confirmation_backtest/member_evolution.csv`
+- `Post-hoc Interpretation & Case Supervision` section in the confirmation report
+
+Acceptance criteria:
+
+- every entry and exit has a stored reason
+- every trade stores member-level context and theme interpretation fields
+- every high-priority case can generate a news-query bundle
+- unresolved or mixed-theme cases are explicitly marked rather than force-labeled
+- the frontend can surface manual-review queues and explanation pages
+
+Status:
+
+- `Not Yet Integrated`
+
+Notes:
+
+- this phase is what turns StockNet from a strategy backtester into a supervised theme-discovery research platform
+- interpretability coverage, theme-confidence coverage, and news-validation coverage should become first-class metrics
+
+## Phase 11: Final Research Report
 
 Goal:
 
@@ -256,8 +332,8 @@ Notes:
 
 ## Immediate Priority Queue
 
-1. implement `lifecycle_id` and lifecycle event tables
-2. improve null-model scoring semantics and community significance outputs
-3. add `edge_emergence` labels and baselines
-4. build community-detail frontend views
-5. upgrade the final report from current-state summary to full research conclusion
+1. implement `Confirmation Backtest v1` output pipeline
+2. add detailed trade-level explainability and member-level context
+3. add community interpretation and news-query generation outputs
+4. build manual case supervision artifacts and frontend review surfaces
+5. upgrade the final report with confirmation-backtest and case-study conclusions

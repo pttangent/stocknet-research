@@ -69,6 +69,32 @@ Next-stage task:
 
 - `edge_emergence`
 
+### RQ6: Can the system detect community rotation?
+
+Rotation is not defined as a traditional sector label switch. In StockNet it is defined as a transfer of structural importance from one `lifecycle_id` to another.
+
+Required ingredients:
+
+- source-community decay
+- target-community expansion
+- member migration
+- edge rewiring
+- relative-strength transfer
+- optional cross-resolution confirmation
+
+### RQ7: Which confirmation and holding rules are best for theme capture?
+
+This question is answered by a confirmation backtest matrix:
+
+`Entry Standard x Exit Standard x Holding Policy`
+
+The point is not only to maximize return. The point is to study:
+
+- how early-entry rules trade speed against noise
+- how confirmation rules trade stability against missed return
+- whether event-driven holding can capture long-cycle themes
+- whether structure-based exits can protect gains better than fixed holding windows
+
 ## Scope
 
 Current scope is intentionally narrow:
@@ -207,6 +233,163 @@ Real communities should be compared against nulls on:
 - Node migration is not a headline result until lifecycle labels improve.
 - Model quality is judged by both metrics and case studies, not AUC alone.
 
+## Confirmation Backtest Protocol
+
+### Matrix design
+
+Main matrix:
+
+`Entry Standard x Exit Standard x Holding Policy`
+
+Recommended first-pass grid:
+
+- `6` entry standards
+- `7` exit standards
+- `6` holding policies
+
+Total:
+
+`252` strategy combinations
+
+### Entry standards
+
+- `Birth Entry`
+- `Emergence Entry`
+- `15m Confirmation Entry`
+- `Cross-resolution Confirmation Entry`
+- `Expansion Entry`
+- `Rotation-in Entry`
+
+### Exit standards
+
+- `No Signal Exit`
+- `Lifecycle Exit`
+- `Coherence Breakdown Exit`
+- `Breadth Breakdown Exit`
+- `Relative Strength Exit`
+- `Rotation-out Exit`
+- `Composite Structural Exit`
+
+### Holding policies
+
+- `Fixed 1D`
+- `Fixed 3D`
+- `Fixed 5D`
+- `Fixed 10D`
+- `Event-driven Hold`
+- `Min-hold + Signal Exit`
+
+### Core evaluation questions
+
+- does earlier entry capture more upside or only more noise?
+- does `15m` confirmation give the best speed-vs-quality tradeoff?
+- is cross-resolution confirmation too slow for trading use?
+- can event-driven holding capture long-cycle themes?
+- do structure-based exits reduce drawdown without cutting winners too early?
+
+## Interpretability, News Validation, and Case Supervision Protocol
+
+### Requirement group
+
+Every backtest output must be explainable after the fact. Strategy-level return is necessary but insufficient.
+
+Required post-hoc layers:
+
+- entry explanation
+- exit explanation
+- member-level trade context
+- community interpretation
+- news-query generation
+- manual case supervision
+
+### Entry explainability
+
+Each trade entry must preserve:
+
+- `entry_standard`
+- `entry_trigger_time`
+- `entry_reason`
+- `entry_stage`
+- `entry_lifecycle_id`
+- `entry_score_components`
+- `coherence_at_entry`
+- `breadth_at_entry`
+- `volume_expansion_at_entry`
+- `relative_strength_at_entry`
+- `edge_birth_rate_at_entry`
+- `rotation_in_score_at_entry`
+- `cross_resolution_support_at_entry`
+
+### Exit explainability
+
+Each trade exit must preserve:
+
+- `exit_standard`
+- `exit_trigger_time`
+- `exit_reason`
+- `exit_stage`
+- `coherence_at_exit`
+- `breadth_at_exit`
+- `relative_strength_at_exit`
+- `rotation_out_score_at_exit`
+- `edge_death_rate_at_exit`
+- `member_outflow_at_exit`
+- `is_fixed_time_exit`
+- `is_signal_exit`
+- `is_forced_end_of_sample_exit`
+
+### Trade-level member context
+
+Each trade must preserve:
+
+- `entry_members`
+- `exit_members`
+- `top_members_at_entry`
+- `top_members_at_exit`
+- `core_members`
+- `new_members`
+- `lost_members`
+- `migrated_members`
+- `rewired_edge_pairs`
+- `member_weights`
+- `member_centrality`
+- `member_momentum`
+- `member_contribution_to_return`
+
+### Community interpretation record
+
+Each `lifecycle_id` should have:
+
+- `theme_guess`
+- `theme_confidence`
+- `theme_keywords`
+- `dominant_sector`
+- `dominant_industry`
+- `dominant_business_description`
+- `representative_members`
+- `unresolved_reason`
+
+### News-validation support
+
+Each high-value case should support:
+
+- `news_query_symbols`
+- `news_query_theme_keywords`
+- `news_query_date_start`
+- `news_query_date_end`
+- `news_catalyst_summary`
+- `news_sources`
+- `news_relevance_score`
+
+### Case supervision
+
+Each important event or trade should support:
+
+- `case_priority`
+- `case_type`
+- `needs_manual_review`
+- `review_reason`
+
 ## Frontend Protocol
 
 The frontend is a research observation system, not a presentation shell.
@@ -218,6 +401,10 @@ Required analysis surfaces:
 - `Multi-resolution Explorer`
 - `Validation Panel`
 - `Model Interpretation Panel`
+- `Case Review Dashboard`
+- `Trade Explanation Page`
+- `Community Interpretation Page`
+- `News Review Panel`
 
 Each chart must answer a research question, not just display an artifact.
 
@@ -231,6 +418,8 @@ Final reporting must answer:
 4. Are lifecycle transitions observable?
 5. What can the models predict reliably?
 6. What remains prototype-only?
+7. Which entry, exit, and holding rules best balance early capture, confirmation quality, and long-cycle theme retention?
+8. Which cases are explainable, news-supported, and worthy of manual follow-up?
 
 ## Current Status Guidance
 

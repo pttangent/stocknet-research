@@ -423,3 +423,156 @@ Used for:
 
 - model interpretation
 - failure analysis
+
+## Confirmation Backtest Metrics
+
+### `entry_standard`
+
+Rule family used to decide when a new theme or lifecycle is investable.
+
+Used for:
+
+- early-vs-confirmed entry comparison
+- missed-return analysis
+
+### `exit_standard`
+
+Rule family used to decide when a theme has structurally weakened enough to exit.
+
+Used for:
+
+- exit-effectiveness comparison
+- drawdown-protection analysis
+
+### `holding_policy`
+
+Trade management policy governing fixed holding, event-driven holding, or hybrid holding.
+
+Used for:
+
+- long-cycle theme capture analysis
+- comparing short-horizon and signal-driven trade behavior
+
+### `avg_time_from_birth_to_entry`
+
+Average delay between lifecycle birth and trade entry.
+
+Used for:
+
+- measuring early-capture speed
+- quantifying confirmation delay
+
+### `avg_missed_return`
+
+Average return that occurred between lifecycle birth and actual entry.
+
+Used for:
+
+- understanding how much upside late confirmation rules sacrifice
+
+### `false_confirmation_rate`
+
+Rate at which an entry rule triggers on themes that later fail structurally or economically.
+
+Used for:
+
+- comparing speed versus noise across entry standards
+
+### `avg_saved_drawdown`
+
+Average drawdown avoided after a given exit rule triggers.
+
+Used for:
+
+- judging whether a structural exit truly protects capital
+
+### `false_exit_rate`
+
+Rate at which an exit rule closes a trade before the theme continues materially upward.
+
+Used for:
+
+- detecting over-eager exit logic
+
+### `open_trade_ratio`
+
+Fraction of trades still open at the end of the sample under a holding policy.
+
+Used for:
+
+- evaluating event-driven holding
+- distinguishing completed from censored long-cycle trades
+
+### `long_hold_contribution`
+
+Share of total strategy return coming from trades held longer than a chosen threshold such as `10D`.
+
+Used for:
+
+- testing whether long-cycle themes drive the edge
+
+### `return_from_long_holds`
+
+Return attributable only to long-horizon trades.
+
+Used for:
+
+- evaluating whether signal-based holding captures durable themes
+
+## Interpretability and Case Supervision Metrics
+
+### `interpretation_coverage`
+
+Fraction of trades or communities with a usable post-hoc explanation record.
+
+Used for:
+
+- measuring whether the system is research-auditable rather than a black box
+
+### `avg_theme_confidence`
+
+Average confidence assigned to post-hoc theme interpretation records.
+
+Used for:
+
+- comparing how interpretable different strategy families are
+
+### `news_validation_coverage`
+
+Fraction of high-priority cases with generated or reviewed news-validation context.
+
+Used for:
+
+- checking whether cases are externally verifiable
+
+### `manual_review_rate`
+
+Fraction of trades or events flagged for human review.
+
+Used for:
+
+- identifying strategy families that produce many ambiguous or risky cases
+
+### `confirmed_case_rate`
+
+Fraction of manually reviewed cases that are accepted as valid themes or rotations.
+
+Used for:
+
+- separating explainable structure from noisy pattern-matching
+
+### `unresolved_theme_rate`
+
+Fraction of communities that cannot be confidently named or interpreted.
+
+Used for:
+
+- quantifying interpretability limits
+
+### `blackbox_signal_rate`
+
+Fraction of trades whose trigger cannot be adequately explained by stored factors, members, or theme interpretation.
+
+Used for:
+
+- identifying strategy outputs that should not be trusted as research-grade findings
