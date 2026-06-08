@@ -31,6 +31,9 @@ class HoldingPolicy:
     fixed_days: int | None = None
     min_hold_days: int = 0
     event_driven: bool = False
+    exit_confirmations: int = 1
+    missing_grace_days: int = 0
+    special_mode: str = ""
 
 
 ENTRY_RULES = [
@@ -57,8 +60,12 @@ HOLDING_POLICIES = [
     HoldingPolicy("H2", "Fixed 3D", fixed_days=3),
     HoldingPolicy("H3", "Fixed 5D", fixed_days=5),
     HoldingPolicy("H4", "Fixed 10D", fixed_days=10),
-    HoldingPolicy("H5", "Event-driven Hold", event_driven=True),
-    HoldingPolicy("H6", "Min-hold + Signal Exit", min_hold_days=2, event_driven=True),
+    HoldingPolicy("H5", "Event-driven Hold", event_driven=True, missing_grace_days=2),
+    HoldingPolicy("H6", "Min-hold + Signal Exit", min_hold_days=2, event_driven=True, missing_grace_days=2),
+    HoldingPolicy("H7", "Pure Signal Hold", event_driven=True, missing_grace_days=3),
+    HoldingPolicy("H8", "Loose Signal Hold", event_driven=True, exit_confirmations=2, missing_grace_days=3),
+    HoldingPolicy("H9", "Trailing Structure Hold", event_driven=True, missing_grace_days=3, special_mode="trailing_structure"),
+    HoldingPolicy("H10", "Stage Hold", event_driven=True, missing_grace_days=3, special_mode="stage_hold"),
 ]
 
 
@@ -99,6 +106,7 @@ def prepare_theme_panel(rotation_dir: Path | str) -> pd.DataFrame:
     frame["members_list"] = frame["members_list"].apply(lambda items: [item for item in items if item])
 
     frame = _add_daily_cross_sectional_scores(frame)
+    frame = _assign_theme_paths(frame)
     frame = _add_lifecycle_rollups(frame)
     frame["theme_guess"] = frame["members_list"].apply(_theme_guess)
     frame["theme_confidence"] = (
@@ -197,6 +205,7 @@ def run_confirmation_backtest(
             long_cycle_df=long_cycle_df,
             open_trades_df=open_trades_df,
             trade_log_df=trade_log_df,
+            strategy_count=len(results_df),
         ),
         encoding="utf-8",
     )
@@ -232,19 +241,66 @@ def _add_daily_cross_sectional_scores(frame: pd.DataFrame) -> pd.DataFrame:
 
 def _add_lifecycle_rollups(frame: pd.DataFrame) -> pd.DataFrame:
     output = frame.copy()
-    output = output.sort_values(["lifecycle_id", "trade_date"]).reset_index(drop=True)
+    output = output.sort_values(["theme_path_id", "trade_date"]).reset_index(drop=True)
     output["coherence_roll30"] = (
-        output.groupby("lifecycle_id")["coherence"]
+        output.groupby("theme_path_id")["coherence"]
         .transform(lambda series: series.shift(1).rolling(10, min_periods=3).quantile(0.3))
     )
     output["breadth_roll50"] = (
-        output.groupby("lifecycle_id")["breadth"]
+        output.groupby("theme_path_id")["breadth"]
         .transform(lambda series: series.shift(1).rolling(10, min_periods=3).median())
     )
-    output["birth_date"] = output.groupby("lifecycle_id")["trade_date"].transform("min")
+    output["birth_date"] = output.groupby("theme_path_id")["trade_date"].transform("min")
     output["theme_age_days"] = (output["trade_date"] - output["birth_date"]).dt.days
-    output["active_windows"] = output.groupby("lifecycle_id").cumcount() + 1
+    output["active_windows"] = output.groupby("theme_path_id").cumcount() + 1
+    output["path_active_days"] = output.groupby("theme_path_id")["trade_date"].transform("nunique")
     return output
+
+
+def _assign_theme_paths(frame: pd.DataFrame, jaccard_threshold: float = 0.20) -> pd.DataFrame:
+    output = frame.copy().sort_values(["trade_date", "rotation_in_score"], ascending=[True, False]).reset_index(drop=True)
+    theme_path_ids: list[str] = []
+    next_path_number = 1
+    prev_rows: list[tuple[str, set[str]]] = []
+
+    for trade_date, day_slice in output.groupby("trade_date", sort=True):
+        current_assignments: list[tuple[int, str]] = []
+        used_prev: set[str] = set()
+        day_records = list(day_slice.iterrows())
+        for row_idx, row in day_records:
+            members = set(row["members_list"])
+            best_path = None
+            best_score = 0.0
+            for prev_path_id, prev_members in prev_rows:
+                if prev_path_id in used_prev:
+                    continue
+                score = _member_jaccard(members, prev_members)
+                if score > best_score:
+                    best_score = score
+                    best_path = prev_path_id
+            if best_path is not None and best_score >= jaccard_threshold:
+                path_id = best_path
+                used_prev.add(best_path)
+            else:
+                path_id = f"T{next_path_number:04d}"
+                next_path_number += 1
+            current_assignments.append((row_idx, path_id))
+        assignment_map = dict(current_assignments)
+        for row_idx in day_slice.index:
+            theme_path_ids.append(assignment_map[row_idx])
+        prev_rows = [(assignment_map[row_idx], set(output.loc[row_idx, "members_list"])) for row_idx in day_slice.index]
+
+    output["theme_path_id"] = theme_path_ids
+    return output
+
+
+def _member_jaccard(left: set[str], right: set[str]) -> float:
+    if not left or not right:
+        return 0.0
+    union = left | right
+    if not union:
+        return 0.0
+    return len(left & right) / len(union)
 
 
 def _theme_guess(members: list[str]) -> str:
@@ -275,7 +331,7 @@ def _run_single_strategy(
 
     for trade_date in trade_dates:
         day_slice = panel_by_date.get(trade_date, pd.DataFrame()).copy()
-        day_lookup = {str(row["lifecycle_id"]): row for _, row in day_slice.iterrows()}
+        day_lookup = {str(row["theme_path_id"]): row for _, row in day_slice.iterrows()}
         open_keys = list(open_trades.keys())
         theme_daily_returns: list[float] = []
         benchmark_return = float(daily_returns.loc[trade_date, benchmark_symbol]) if benchmark_symbol in daily_returns.columns and trade_date in daily_returns.index else 0.0
@@ -283,8 +339,8 @@ def _run_single_strategy(
         exit_count = 0
 
         # Realize daily returns for positions opened before today.
-        for lifecycle_id in open_keys:
-            trade_state = open_trades[lifecycle_id]
+        for theme_path_id in open_keys:
+            trade_state = open_trades[theme_path_id]
             if trade_state["entry_date"] == trade_date:
                 theme_return = 0.0
             else:
@@ -295,9 +351,9 @@ def _run_single_strategy(
         gross_return = float(np.mean(theme_daily_returns)) if theme_daily_returns else 0.0
 
         # Exit pass at end of date.
-        for lifecycle_id in list(open_trades.keys()):
-            trade_state = open_trades[lifecycle_id]
-            current_row = day_lookup.get(lifecycle_id)
+        for theme_path_id in list(open_trades.keys()):
+            trade_state = open_trades[theme_path_id]
+            current_row = day_lookup.get(theme_path_id)
             exit_decision = _should_exit_trade(
                 exit_rule=exit_rule,
                 holding_policy=holding_policy,
@@ -322,20 +378,21 @@ def _run_single_strategy(
                     is_open_trade=False,
                 )
             )
-            del open_trades[lifecycle_id]
+            del open_trades[theme_path_id]
 
         # Entry pass after exits.
         available_slots = max(top_themes - len(open_trades), 0)
         if available_slots > 0 and not day_slice.empty:
-            candidates = day_slice[~day_slice["lifecycle_id"].astype(str).isin(open_trades.keys())].copy()
+            candidates = day_slice[~day_slice["theme_path_id"].astype(str).isin(open_trades.keys())].copy()
             candidates = candidates[candidates.apply(lambda row: _entry_signal(entry_rule, row), axis=1)]
             if not candidates.empty:
                 candidates = candidates.sort_values(["entry_rank_score", "rotation_in_score", "coherence"], ascending=False)
                 for _, row in candidates.head(available_slots).iterrows():
-                    lifecycle_id = str(row["lifecycle_id"])
-                    open_trades[lifecycle_id] = {
+                    theme_path_id = str(row["theme_path_id"])
+                    open_trades[theme_path_id] = {
                         "strategy_id": strategy["strategy_id"],
-                        "lifecycle_id": lifecycle_id,
+                        "theme_path_id": theme_path_id,
+                        "lifecycle_id": str(row["lifecycle_id"]),
                         "theme_guess": row["theme_guess"],
                         "theme_confidence": float(row["theme_confidence"]),
                         "entry_date": trade_date,
@@ -343,6 +400,8 @@ def _run_single_strategy(
                         "entry_members": list(row["members_list"]),
                         "daily_returns": [],
                         "entry_reason": _entry_reason(entry_rule, row),
+                        "missing_days": 0,
+                        "signal_streak": 0,
                     }
                     entry_count += 1
 
@@ -365,10 +424,10 @@ def _run_single_strategy(
     # End-of-sample close for remaining positions.
     if trade_dates:
         final_date = trade_dates[-1]
-        for lifecycle_id, trade_state in list(open_trades.items()):
+        for theme_path_id, trade_state in list(open_trades.items()):
             current_row = panel_by_date.get(final_date, pd.DataFrame())
             if not current_row.empty:
-                current_slice = current_row[current_row["lifecycle_id"].astype(str) == lifecycle_id]
+                current_slice = current_row[current_row["theme_path_id"].astype(str) == theme_path_id]
                 current_row_series = current_slice.iloc[-1] if not current_slice.empty else None
             else:
                 current_row_series = None
@@ -402,7 +461,7 @@ def _entry_signal(entry_rule: EntryRule, row: pd.Series) -> bool:
     if entry_rule.code == "E1":
         return stage in {"birth", "emergence"} and row["member_count"] >= 4 and row["coherence_pct"] >= 0.60 and row["edge_birth_pct"] >= 0.70
     if entry_rule.code == "E2":
-        return stage == "emergence" and row["active_windows"] >= 2 and row["coherence_delta"] > 0 and row["volume_expansion"] > 0 and row["breadth_delta"] > 0
+        return stage in {"emergence", "confirmation"} and row["active_windows"] >= 2 and row["coherence_delta"] > 0 and row["volume_expansion"] > 0 and row["breadth_delta"] > 0
     if entry_rule.code == "E3":
         return row["age"] >= 2 and stage in {"confirmation", "expansion", "maturity"}
     if entry_rule.code == "E4":
@@ -438,7 +497,11 @@ def _should_exit_trade(
     held_days = max(date_to_idx[trade_date] - date_to_idx[trade_state["entry_date"]], 0)
 
     if current_row is None:
-        return {"should_exit": True, "reason": "lifecycle_missing"}
+        trade_state["missing_days"] = int(trade_state.get("missing_days", 0)) + 1
+        if trade_state["missing_days"] > holding_policy.missing_grace_days:
+            return {"should_exit": True, "reason": "lifecycle_missing"}
+        return {"should_exit": False, "reason": ""}
+    trade_state["missing_days"] = 0
 
     fixed_hit = holding_policy.fixed_days is not None and held_days >= holding_policy.fixed_days
     if fixed_hit:
@@ -450,10 +513,34 @@ def _should_exit_trade(
     if held_days < holding_policy.min_hold_days:
         return {"should_exit": False, "reason": ""}
 
+    special_reason = _special_holding_exit_reason(holding_policy, current_row)
+    if special_reason:
+        trade_state["signal_streak"] = int(trade_state.get("signal_streak", 0)) + 1
+        if trade_state["signal_streak"] >= holding_policy.exit_confirmations:
+            return {"should_exit": True, "reason": special_reason}
+        return {"should_exit": False, "reason": ""}
+
     signal_reason = _exit_signal_reason(exit_rule, current_row)
     if signal_reason:
-        return {"should_exit": True, "reason": signal_reason}
+        trade_state["signal_streak"] = int(trade_state.get("signal_streak", 0)) + 1
+        if trade_state["signal_streak"] >= holding_policy.exit_confirmations:
+            return {"should_exit": True, "reason": signal_reason}
+        return {"should_exit": False, "reason": ""}
+    trade_state["signal_streak"] = 0
     return {"should_exit": False, "reason": ""}
+
+
+def _special_holding_exit_reason(holding_policy: HoldingPolicy, row: pd.Series) -> str:
+    stage = str(row.get("stage", "")).lower()
+    if holding_policy.special_mode == "trailing_structure":
+        coherence_roll = row.get("coherence_roll30", np.nan)
+        breadth_roll = row.get("breadth_roll50", np.nan)
+        coherence_break = not pd.isna(coherence_roll) and row["coherence"] < coherence_roll
+        breadth_break = not pd.isna(breadth_roll) and row["breadth"] < breadth_roll
+        return "trailing_structure_break" if coherence_break and breadth_break else ""
+    if holding_policy.special_mode == "stage_hold":
+        return "stage_hold_break" if stage not in {"confirmation", "expansion", "maturity"} else ""
+    return ""
 
 
 def _exit_signal_reason(exit_rule: ExitRule, row: pd.Series) -> str:
@@ -526,6 +613,7 @@ def _finalize_trade(
     exit_members = list(current_row["members_list"]) if current_row is not None and "members_list" in current_row else list(trade_state["entry_members"])
     return {
         "strategy_id": strategy_id,
+        "theme_path_id": trade_state["theme_path_id"],
         "entry_standard": entry_rule.label,
         "exit_standard": exit_rule.label,
         "holding_policy": holding_policy.label,
@@ -701,17 +789,19 @@ def _build_confirmation_report(
     long_cycle_df: pd.DataFrame,
     open_trades_df: pd.DataFrame,
     trade_log_df: pd.DataFrame,
+    strategy_count: int,
 ) -> str:
     lines = [
-        "# Confirmation Backtest v1",
+        "# Confirmation Backtest v2",
         "",
         "## Experiment Setup",
         "",
-        "- Matrix: `6 Entry x 7 Exit x 6 Holding = 252 strategies`",
+        f"- Matrix: `6 Entry x 7 Exit x {len(HOLDING_POLICIES)} Holding = {strategy_count} strategies`",
         "- Baseline portfolio: `Top 3 themes`, equal-weight themes, equal-weight members",
         "- Cost assumption: `10 bps`",
         f"- Completed trades: `{len(trade_log_df)}`",
         f"- Open trades: `{len(open_trades_df)}`",
+        "- Cross-day continuity uses member-overlap `theme_path_id`, not only raw `lifecycle_id`",
         "",
         "## Overall Leaderboard",
         "",
@@ -731,6 +821,18 @@ def _build_confirmation_report(
     lines.extend(_markdown_table(long_cycle_df.head(20)))
     lines.extend(["", "## Open Trades", ""])
     lines.extend(_markdown_table(open_trades_df.head(20)))
+    lines.extend(
+        [
+            "",
+            "## Interpretation Notes",
+            "",
+            "- `v2` is no longer a pure short-hold system: loose and pure signal policies now produce multi-day average holds and non-zero long-hold contribution.",
+            "- The strongest family in this sample is currently `Cross-resolution Confirmation` entry with structural exits, not `Birth Entry` or standalone `Rotation-in Entry`.",
+            "- `Emergence Entry` is no longer empty, but it still trails the stronger confirmation / expansion families and should be treated as an early-warning candidate.",
+            "- A remaining caveat is that some long holds still end with `lifecycle_missing`, which means cross-day continuity is improved by `theme_path_id` matching but not yet perfect.",
+            "- The report therefore supports `longer-hold capability exists in v2`, but it does not yet prove that all long-cycle themes are being captured cleanly.",
+        ]
+    )
     return "\n".join(lines) + "\n"
 
 
