@@ -124,14 +124,14 @@ class IntradayLogger:
         return pd.DataFrame()
 
 
-class OneMinuteArchiveWriter:
-    """Persist a traceable local 1-minute archive for later replay and research."""
+class BarArchiveWriter:
+    """Persist a traceable local bar archive for later replay and research."""
 
     def __init__(self, config: Optional[OutputConfig] = None):
         self.config = config or OutputConfig()
         os.makedirs(self.config.archive_dir, exist_ok=True)
 
-    def append_bars(self, bars_df: pd.DataFrame, provider: str = "yahoo", interval: str = "1m") -> None:
+    def append_bars(self, bars_df: pd.DataFrame, provider: str = "yahoo", interval: str = "5m") -> None:
         """Append fetched bars to the archive, partitioned by session date."""
         if bars_df.empty:
             return
@@ -189,6 +189,10 @@ class OneMinuteArchiveWriter:
             manifest_row.to_csv(path, index=False)
 
 
+# Backward compatibility alias
+OneMinuteArchiveWriter = BarArchiveWriter
+
+
 class PartitionedParquetWriter:
     """Write symbol-partitioned parquet files compatible with HistoricalParquetFeed."""
 
@@ -216,3 +220,20 @@ class PartitionedParquetWriter:
             payload.to_parquet(target_path, index=False)
             rows_written += len(group)
         return rows_written
+
+
+class ScannerStateWriter:
+    """Persist the latest headless scanner state for downstream consumers."""
+
+    def __init__(self, config: Optional[OutputConfig] = None):
+        self.config = config or OutputConfig()
+        self.state_dir = os.path.join(self.config.artifact_dir, "scanner_state")
+        os.makedirs(self.state_dir, exist_ok=True)
+
+    def write_json(self, name: str, payload: dict) -> str:
+        path = os.path.join(self.state_dir, name)
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "w", encoding="utf-8") as handle:
+            import json
+            json.dump(payload, handle, indent=2, default=str)
+        return path

@@ -108,7 +108,11 @@ class CommunityScorer:
         df: pd.DataFrame,
         edges_df: pd.DataFrame,
     ) -> pd.Series:
-        """Compute edge growth relative to previous window."""
+        """Compute edge growth relative to previous window.
+
+        Falls back to theme_path_id matching if community_id doesn't match,
+        since community_id is unstable across detections.
+        """
         result = pd.Series(0.0, index=df.index)
 
         if len(self._history) == 0:
@@ -118,7 +122,13 @@ class CommunityScorer:
 
         for idx, row in df.iterrows():
             comm_id = row.get("community_id")
+            theme_path_id = row.get("theme_path_id", "")
+
+            # Try community_id first, then theme_path_id fallback
             prev_row = prev[prev["community_id"] == comm_id]
+            if prev_row.empty and theme_path_id and "theme_path_id" in prev.columns:
+                prev_row = prev[prev["theme_path_id"] == theme_path_id]
+
             if prev_row.empty:
                 result.loc[idx] = 0.0
                 continue
@@ -137,7 +147,11 @@ class CommunityScorer:
         return (result - mean) / std
 
     def _compute_member_stability(self, df: pd.DataFrame) -> pd.Series:
-        """Compute member overlap with previous window."""
+        """Compute member overlap with previous window.
+
+        Falls back to theme_path_id matching if community_id doesn't match,
+        since community_id is unstable across detections.
+        """
         result = pd.Series(0.0, index=df.index)
 
         if len(self._history) == 0:
@@ -147,9 +161,14 @@ class CommunityScorer:
 
         for idx, row in df.iterrows():
             comm_id = row.get("community_id")
+            theme_path_id = row.get("theme_path_id", "")
             curr_members = set(row.get("members", "").split(","))
 
+            # Try community_id first, then theme_path_id fallback
             prev_row = prev[prev["community_id"] == comm_id]
+            if prev_row.empty and theme_path_id and "theme_path_id" in prev.columns:
+                prev_row = prev[prev["theme_path_id"] == theme_path_id]
+
             if prev_row.empty:
                 result.loc[idx] = 0.0
                 continue

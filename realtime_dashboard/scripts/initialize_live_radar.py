@@ -1,13 +1,12 @@
-"""Initialize recent 1m history, aggregate to 15m, verify pipeline, then launch dashboard."""
+"""Initialize recent 1m history, aggregate to 5m/15m, and verify scanner readiness."""
 
 from __future__ import annotations
 
 import argparse
 import json
 import os
-import subprocess
 import sys
-from datetime import datetime
+from datetime import datetime, UTC
 
 import pandas as pd
 
@@ -32,8 +31,6 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--workers", type=int, default=64)
     parser.add_argument("--one-minute-days", type=int, default=7)
     parser.add_argument("--fifteen-minute-days", type=int, default=60)
-    parser.add_argument("--port", type=int, default=8501)
-    parser.add_argument("--launch-dashboard", action="store_true")
     return parser.parse_args()
 
 
@@ -105,28 +102,6 @@ def verify_pipeline(config: RadarConfig, bars_df: pd.DataFrame, frequency: str) 
     }
 
 
-def launch_dashboard(port: int, historical_dir: str) -> None:
-    app_path = os.path.join(ROOT_DIR, "dashboard", "app.py")
-    env = os.environ.copy()
-    env["STOCKNET_RADAR_MODE"] = "hybrid"
-    env["STOCKNET_RADAR_HISTORICAL_DIR"] = historical_dir
-
-    cmd = [
-        sys.executable,
-        "-m",
-        "streamlit",
-        "run",
-        app_path,
-        "--server.port",
-        str(port),
-        "--server.headless",
-        "true",
-        "--browser.gatherUsageStats",
-        "false",
-    ]
-    subprocess.Popen(cmd, env=env, cwd=os.path.dirname(ROOT_DIR))
-
-
 def main() -> None:
     args = parse_args()
     config = RadarConfig(mode="hybrid")
@@ -154,28 +129,33 @@ def main() -> None:
     if one_minute.empty:
         raise RuntimeError("Failed to fetch recent 1m history from Yahoo.")
 
+    five_minute = aggregate_intraday(one_minute, "5min")
     fifteen_minute = aggregate_intraday(one_minute, "15min")
 
     archive_writer = OneMinuteArchiveWriter(config.output)
     archive_writer.append_bars(one_minute, provider="yahoo", interval="1m")
 
     warmup_1m_dir = config.data_source.historical_parquet_dir
+    warmup_5m_dir = os.path.join(config.output.base_dir, "warmup_5m")
     warmup_15m_dir = os.path.join(config.output.base_dir, "warmup_15m")
     archive_15m_dir = os.path.join(config.output.base_dir, "archive_15m_from_1m")
 
     PartitionedParquetWriter(warmup_1m_dir).write(one_minute)
+    PartitionedParquetWriter(warmup_5m_dir).write(five_minute)
     PartitionedParquetWriter(warmup_15m_dir).write(fifteen_minute)
     PartitionedParquetWriter(archive_15m_dir).write(fifteen_minute)
 
     verification = {
-        "generated_at": datetime.utcnow().isoformat() + "Z",
+        "generated_at": datetime.now(UTC).isoformat(),
         "universe": args.universe,
         "symbols_loaded": len(symbols),
         "symbols_excluded": len(excluded),
         "warmup_1m_dir": warmup_1m_dir,
+        "warmup_5m_dir": warmup_5m_dir,
         "warmup_15m_dir": warmup_15m_dir,
         "archive_15m_dir": archive_15m_dir,
         "one_minute": verify_pipeline(config, one_minute, "1m"),
+        "five_minute": verify_pipeline(config, five_minute, "5m"),
         "fifteen_minute": verify_pipeline(config, fifteen_minute, "15m"),
     }
 
@@ -186,10 +166,6 @@ def main() -> None:
         json.dump(verification, handle, indent=2, default=str)
 
     print(json.dumps(verification, indent=2, default=str))
-
-    if args.launch_dashboard:
-        launch_dashboard(args.port, warmup_1m_dir)
-        print(f"Dashboard launched at http://localhost:{args.port}")
 
 
 if __name__ == "__main__":

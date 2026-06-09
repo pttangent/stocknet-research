@@ -1,124 +1,102 @@
-# Realtime Community Monitoring Radar
+# Realtime Scanner
 
-Realtime community and sector-rotation dashboard for scanning US equities from
-intraday bars and turning them into live co-movement communities.
+Headless realtime scanner for intraday stock-community detection.
 
-## What Changed
+The frontend has been removed. This branch is intentionally scanner-only and is
+meant to run as a continuous process, not as a dashboard app.
 
-This dashboard is now aligned with a stricter intraday workflow:
+## Branch Strategy
 
-- `ETF / CEF` symbols can be excluded from the monitored universe using
-  `D:\DEV\stocknetwork\P123_ETFCEF.csv`
-- a dedicated `1m` archive pipeline can continuously save Yahoo minute bars into
-  a traceable local store
-- the `Market Map` is upgraded into a realtime community bubble radar driven by
-  `theme_path_id`, current metrics, and one-step structural drift
+This branch is the long-lived code branch for realtime scanning:
+
+- branch: `realtime-scanner-headless`
+
+Runtime scans do **not** create a new Git branch each time. That would be noisy,
+slow, and hard to manage because scans are frequent and data-heavy. Instead:
+
+- code changes live on the branch
+- each scanner session writes a `run_id`
+- operational outputs are stored under local `data/` and `artifacts/`
+- Git is used for code lineage, not minute-by-minute runtime data
+
+## What This Scanner Does
+
+- pulls recent Yahoo-supported `1m` bars
+- archives raw minute bars locally
+- scans `1m` communities as early radar
+- optionally aggregates the cached `1m` bars into `15m`
+- scans `15m` communities as the higher-confidence confirmation layer
+- writes machine-readable current state snapshots and alerts
+
+## Why This Design
+
+`1m` is useful as an early radar, but `15m` is currently the more reliable
+structural scale. The scanner therefore supports:
+
+- `1m` for early detection
+- `15m` from aggregated `1m` for confirmation
+
+This reduces dependency on separate live `15m` pulls and keeps both scales
+aligned to the same raw minute tape.
 
 ## Important 1m Data Constraint
 
-Yahoo / `yfinance` is useful for live minute polling, but it is not a true
-"pull any date in the past forever" source for `1m` bars. The practical way to
-build a full historical `1m` research base is:
+Yahoo / `yfinance` style minute data is not a true all-history source. Full
+research continuity comes from:
 
-1. use Yahoo / `yfinance`-style minute polling during market hours
-2. append the fetched bars into a local parquet archive every minute
-3. reuse that archive for replay, model training, and post-session review
+`live polling + local archive`
 
-In other words:
-
-`1m full history = live polling + local archival`, not `on-demand backfill`.
-
-## Architecture
-
-```text
-Yahoo intraday polling
-  -> 1m archive writer
-  -> rolling feature engine
-  -> graph builder
-  -> community detector
-  -> community scorer
-  -> alert engine
-  -> state tracker
-  -> Streamlit realtime bubble radar
-```
+not from unlimited historical backfill.
 
 ## Quick Start
 
-### 1. Install dependencies
-
-```bash
-pip install streamlit plotly networkx pandas numpy python-louvain pyarrow
-```
-
-### 2. Launch the dashboard
+### 1. Initialize warmup history
 
 ```bash
 cd D:\DEV\stocknetwork\StockNet
-python -m streamlit run realtime_dashboard/dashboard/app.py
+python realtime_dashboard/scripts/initialize_live_radar.py --universe core_500
 ```
 
-Frontend entry file:
+This prepares:
 
-`D:\DEV\stocknetwork\StockNet\realtime_dashboard\dashboard\app.py`
+- `warmup_1m`
+- `warmup_15m`
+- initialization verification reports
 
-### 3. Build a local 1m archive
+### 2. Run the continuous scanner
 
 ```bash
 cd D:\DEV\stocknetwork\StockNet
-python realtime_dashboard/scripts/archive_yfinance_1m.py --universe full_market --scans 390 --sleep-seconds 60
+python realtime_dashboard/scripts/run_realtime_scanner.py --universe core_500 --scan-mode full_parallel --workers 64 --enable-15m
 ```
 
 Useful options:
 
 ```bash
-python realtime_dashboard/scripts/archive_yfinance_1m.py --universe core_500 --chunk-size 150 --scans 0
-python realtime_dashboard/scripts/archive_yfinance_1m.py --universe watchlist --include-benchmarks
-python realtime_dashboard/scripts/archive_yfinance_1m.py --exclude-csv D:\DEV\stocknetwork\P123_ETFCEF.csv
-```
-
-`--scans 0` means run continuously until you stop the process.
-
-## Scan Modes
-
-The live dashboard now supports two scan modes:
-
-- `chunked`: scan one chunk of the universe per cycle
-- `full_parallel`: scan the full loaded universe every cycle using the configured worker pool
-
-`full_parallel` is the right choice when you have a strong workstation and want
-the freshest possible whole-universe community map. It is still limited by
-Yahoo response quality and rate limits, not by your CPU or GPU alone.
-
-### 4. Run a simulated demo
-
-```bash
-python realtime_dashboard/scripts/live_demo.py --mode quick --quick-scans 30
+python realtime_dashboard/scripts/run_realtime_scanner.py --universe watchlist --max-scans 1 --enable-15m
+python realtime_dashboard/scripts/run_realtime_scanner.py --universe core_500 --scan-interval-seconds 60 --workers 64 --enable-15m
+python realtime_dashboard/scripts/run_realtime_scanner.py --universe full_market --scan-mode chunked --scan-interval-seconds 60 --enable-15m
 ```
 
 ## Universe Handling
 
-Universe selection supports:
+The scanner supports:
 
 - `watchlist`
 - `core_500`
 - `full_market`
 
-The dashboard and the archive script both use the same exclusion logic:
+and uses ETF / CEF exclusion by default from:
 
-- default blacklist: `D:\DEV\stocknetwork\P123_ETFCEF.csv`
-- default behavior: remove `ETF / CEF` symbols from community scanning
-- optional behavior: keep benchmark ETFs only when `keep_benchmark_symbols=True`
+`D:\DEV\stocknetwork\P123_ETFCEF.csv`
 
-This is meant to keep the radar focused on stock communities instead of index
-wrappers and fund products.
+## Outputs
 
-## Output Files
+### Daily logs
 
-Daily realtime session logs are written under:
+Written under:
 
-```text
-realtime_dashboard/data/YYYY-MM-DD/
-```
+`realtime_dashboard/data/YYYY-MM-DD/`
 
 Key files:
 
@@ -128,66 +106,48 @@ Key files:
 - `live_alerts.csv`
 - `community_edges.csv`
 
-Long-run minute archive is written under:
+### Long-run archive
 
-```text
-realtime_dashboard/data/archive_1m/
-```
+Written under:
 
-Key archive files:
+`realtime_dashboard/data/archive_1m/`
 
-- `date=YYYY-MM-DD/1m_bars.parquet`
-- `archive_manifest.csv`
+### Scanner state
 
-The archive parquet keeps raw fetched bars plus traceability fields such as:
+Written under:
 
-- `archive_fetched_at`
-- `archive_provider`
-- `archive_interval`
+`realtime_dashboard/artifacts/scanner_state/`
 
-## Dashboard Pages
+Key files:
 
-| Page | Description |
-|------|-------------|
-| `Live Radar` | live community table, alert stream, and community detail |
-| `Timeline` | alert evolution and persistence review |
-| `Market Map` | realtime bubble radar using `theme_path_id`, structural drift, and current community state |
-| `Review` | post-session summary and markdown review |
+- `current_state.json`
+- `latest_alerts.json`
 
-## Realtime Bubble Radar
+### Initialization reports
 
-The upgraded market map is designed for intraday community motion, not just a
-static scatter plot.
+Written under:
 
-Each bubble represents the latest state of a persistent `theme_path_id`:
+`realtime_dashboard/artifacts/initialization/`
 
-- `x` = relative return
-- `y` = volume expansion
-- `size` = member count
-- `color` = current structural status such as `expansion`, `confirmed`, or `decay`
-- line segment = previous location to latest location
+Key files:
 
-This makes it easier to scan:
+- `initialization_report.json`
+- `warmup_verification_report.json`
 
-- which communities are accelerating
-- which ones are losing coherence
-- which ones are moving from noise to confirmation
+## Operational Guidance
 
-## Recommended Workflow
+- Use `1m` as the early radar.
+- Use `15m` as the main confidence layer.
+- Prefer `full_parallel` for strong hardware and moderate universes.
+- Prefer `chunked` for very large universes where Yahoo throughput becomes the bottleneck.
 
-For a production-like research loop:
+## Removed
 
-1. run the `1m` archive script during market hours
-2. point the dashboard at the same filtered universe
-3. monitor live bubbles and alerts during the session
-4. use the archived parquet for replay and community review after the close
+The following are no longer part of this branch:
 
-## Roadmap
-
-- causal community rotation alert layer
-- stricter liquidity and ETF exclusion controls
-- theme interpreter and news validation
-- backend service for continuous market-hour archival
+- Streamlit dashboard
+- dashboard components
+- dashboard launcher
 
 ## License
 

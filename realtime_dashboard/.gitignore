@@ -1,5 +1,7 @@
 data/
-artifacts/
+artifacts/*
+!artifacts/scanner_state/
+!artifacts/theme_state/
 __pycache__/
 dashboard/__pycache__/
 dashboard/components/__pycache__/

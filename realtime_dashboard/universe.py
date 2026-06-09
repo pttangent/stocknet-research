@@ -105,12 +105,49 @@ def apply_symbol_exclusions(
     return list(dict.fromkeys(filtered))
 
 
+def build_symbol_universe_from_file(
+    config: RadarConfig,
+    universe_file: str,
+    include_benchmarks: bool | None = None,
+) -> tuple[list[str], set[str]]:
+    """Build universe from a P123 CSV file. Returns (symbols, excluded_symbols)."""
+    symbols = load_symbol_csv(universe_file)
+    if not symbols:
+        raise ValueError(f"No symbols loaded from {universe_file}")
+
+    excluded_symbols = load_excluded_symbols(config)
+
+    if include_benchmarks is None:
+        include_benchmarks = config.universe.keep_benchmark_symbols
+
+    keep_symbols = config.feature.relative_benchmarks if include_benchmarks else []
+    raw_count = len(symbols)
+    symbols = apply_symbol_exclusions(symbols, excluded_symbols, keep_symbols=keep_symbols)
+    excluded_count = raw_count - len(symbols)
+
+    if include_benchmarks:
+        for benchmark in config.feature.relative_benchmarks:
+            normalized = _normalize_symbol(benchmark)
+            if normalized not in symbols:
+                symbols.append(normalized)
+
+    print(
+        f"Universe source: {universe_file} | Raw: {raw_count} | "
+        f"ETF/CEF excluded: {excluded_count} | Final: {len(symbols)}"
+    )
+    return symbols, excluded_symbols
+
+
 def build_symbol_universe(
     config: RadarConfig,
     universe: str = "watchlist",
     include_benchmarks: bool | None = None,
+    universe_file: str | None = None,
 ) -> tuple[list[str], set[str]]:
     """Build the monitoring universe and return (symbols, excluded_symbols)."""
+    if universe_file and os.path.exists(universe_file):
+        return build_symbol_universe_from_file(config, universe_file, include_benchmarks)
+
     ds = config.data_source
     if universe == "full_market":
         manifest_path = os.path.join(ds.universe_manifest_dir, "_manifest.csv")

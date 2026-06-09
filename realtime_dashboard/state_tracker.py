@@ -20,6 +20,10 @@ class CommunitySnapshot:
     theme_path_id: Optional[str] = None
     level: int = 0
     status: str = ""
+    event_type: str = ""  # birth | continuation | revival | weak_continuation
+    match_score: float = 0.0
+    matched_previous_frequency: str = ""
+    matched_previous_community_id: str = ""
     radar_score: float = 0.0
     early_score: float = 0.0
     confirmation_score: float = 0.0
@@ -42,6 +46,10 @@ class CommunitySnapshot:
             "theme_path_id": self.theme_path_id,
             "level": self.level,
             "status": self.status,
+            "event_type": self.event_type,
+            "match_score": round(self.match_score, 4),
+            "matched_previous_frequency": self.matched_previous_frequency,
+            "matched_previous_community_id": self.matched_previous_community_id,
             "radar_score": round(self.radar_score, 4),
             "early_score": round(self.early_score, 4),
             "confirmation_score": round(self.confirmation_score, 4),
@@ -82,8 +90,16 @@ class StateTracker:
         for _, row in communities_df.iterrows():
             comm_id = row["community_id"]
 
-            # Assign theme path (persistent ID across windows)
-            theme_path = self._assign_theme_path(comm_id, row)
+            # Use theme_path_id from ThemeStateManager if available
+            theme_path = row.get("theme_path_id", "")
+            if not theme_path or pd.isna(theme_path):
+                # Fallback: self-assign (for backward compatibility)
+                theme_path = self._assign_theme_path(comm_id, row)
+
+            event_type = row.get("event_type", "") if "event_type" in row else ""
+            match_score = row.get("match_score", 0.0) if "match_score" in row else 0.0
+            matched_freq = row.get("matched_previous_frequency", "") if "matched_previous_frequency" in row else ""
+            matched_comm = row.get("matched_previous_community_id", "") if "matched_previous_community_id" in row else ""
 
             snapshot = CommunitySnapshot(
                 timestamp=timestamp,
@@ -92,6 +108,10 @@ class StateTracker:
                 theme_path_id=theme_path,
                 level=row.get("level", 0) if "level" in row else 0,
                 status=row.get("status", ""),
+                event_type=event_type,
+                match_score=match_score,
+                matched_previous_frequency=matched_freq,
+                matched_previous_community_id=matched_comm,
                 radar_score=row.get("radar_score", 0.0),
                 early_score=row.get("early_score", 0.0),
                 confirmation_score=row.get("confirmation_score", 0.0),

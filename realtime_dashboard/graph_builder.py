@@ -72,61 +72,84 @@ class GraphBuilder:
         bar_history: pd.DataFrame,
         nodes_df: pd.DataFrame,
     ) -> pd.DataFrame:
-        """Build edges from historical bar correlations."""
+        """Build edges from historical bar correlations using vectorized ops."""
         symbols = nodes_df["symbol"].unique()
         if len(symbols) < 2:
             return pd.DataFrame()
 
-        # Pivot to returns matrix: time x symbols
         df = bar_history.copy()
+        df["timestamp"] = pd.to_datetime(df["timestamp"], utc=True)
         df = df.sort_values(["symbol", "timestamp"])
 
-        # Compute per-symbol returns
-        returns_matrix = []
-        sym_list = []
-        for sym in symbols:
-            sym_bars = df[df["symbol"] == sym].sort_values("timestamp")
-            if len(sym_bars) < 3:
-                continue
-            sym_returns = sym_bars["close"].pct_change().dropna().values
-            if len(sym_returns) >= 3:
-                returns_matrix.append(sym_returns)
-                sym_list.append(sym)
+        # --- Vectorized returns computation ---
+        # Pivot: timestamp x symbol, then pct_change per column
+        price_pivot = df.pivot_table(
+            index="timestamp", columns="symbol", values="close"
+        )
+        returns_pivot = price_pivot.pct_change().dropna(how="all")
 
-        if len(sym_list) < 2:
+        if returns_pivot.empty or len(returns_pivot) < 3:
             return pd.DataFrame()
 
-        # Compute correlations
+        # Keep only symbols present in nodes_df
+        valid_syms = [s for s in symbols if s in returns_pivot.columns]
+        returns_pivot = returns_pivot[valid_syms].dropna(how="all", axis=1)
+        if returns_pivot.shape[1] < 2:
+            return pd.DataFrame()
+
+        # --- Correlation matrix (vectorized) ---
+        corr_mat = returns_pivot.corr()
+
+        # --- Volume correlation (vectorized) ---
+        vol_corr_mat = None
+        if "volume" in df.columns:
+            vol_pivot = df.pivot_table(
+                index="timestamp", columns="symbol", values="volume"
+            )
+            # Use same columns as returns
+            common_syms = [s for s in valid_syms if s in vol_pivot.columns]
+            if len(common_syms) >= 2:
+                vol_pivot = vol_pivot[common_syms]
+                vol_corr_mat = vol_pivot.corr()
+
+        # --- Directional agreement (vectorized) ---
+        sign_pivot = np.sign(returns_pivot)
+        # For each pair, mean of matching signs
+        n = len(sign_pivot)
+        if n > 0:
+            # directional_agreement[i,j] = mean(sign_i == sign_j)
+            # Compute via dot product of boolean matrix
+            sign_bool = (sign_pivot.values == 1).astype(float)  # up = 1, down/flat = 0
+            # But we need exact match of signs (-1, 0, 1)
+            # Use: agreement = count(equal) / total
+            # Vectorized: for each pair of columns
+            cols = sign_pivot.columns.tolist()
+            da_values = {}
+            for i, si in enumerate(cols):
+                for j, sj in enumerate(cols):
+                    if i >= j:
+                        continue
+                    da_values[(si, sj)] = (sign_pivot[si] == sign_pivot[sj]).mean()
+        else:
+            da_values = {}
+
+        # --- Build edges from correlation matrix ---
         edges = []
-        for i in range(len(sym_list)):
-            for j in range(i + 1, len(sym_list)):
-                # Align lengths
-                ret_i = returns_matrix[i]
-                ret_j = returns_matrix[j]
-                min_len = min(len(ret_i), len(ret_j))
-                if min_len < 3:
+        syms = corr_mat.columns.tolist()
+        for i in range(len(syms)):
+            for j in range(i + 1, len(syms)):
+                si, sj = syms[i], syms[j]
+                return_corr = corr_mat.iloc[i, j]
+                if pd.isna(return_corr):
                     continue
 
-                ret_i = ret_i[-min_len:]
-                ret_j = ret_j[-min_len:]
-
-                return_corr = np.corrcoef(ret_i, ret_j)[0, 1]
-                if np.isnan(return_corr):
-                    continue
-
-                # Volume correlation (if available)
                 vol_corr = 0.0
-                if "volume" in bar_history.columns:
-                    vol_i = df[df["symbol"] == sym_list[i]]["volume"].values[-min_len:]
-                    vol_j = df[df["symbol"] == sym_list[j]]["volume"].values[-min_len:]
-                    if len(vol_i) >= 3 and len(vol_j) >= 3:
-                        vcorr = np.corrcoef(vol_i, vol_j)[0, 1]
-                        vol_corr = 0.0 if np.isnan(vcorr) else vcorr
+                if vol_corr_mat is not None and si in vol_corr_mat.columns and sj in vol_corr_mat.columns:
+                    vc = vol_corr_mat.loc[si, sj]
+                    if not pd.isna(vc):
+                        vol_corr = float(vc)
 
-                # Directional agreement
-                direction_i = np.sign(ret_i)
-                direction_j = np.sign(ret_j)
-                directional_agreement = np.mean(direction_i == direction_j)
+                directional_agreement = da_values.get((si, sj), 0.5)
 
                 # Apply thresholds
                 passes = (
@@ -134,11 +157,9 @@ class GraphBuilder:
                     or abs(vol_corr) >= self.config.min_volume_corr
                     or directional_agreement >= self.config.min_directional_agreement
                 )
-
                 if not passes:
                     continue
 
-                # Edge weight formula
                 weight = (
                     0.5 * abs(return_corr)
                     + 0.3 * abs(vol_corr)
@@ -146,12 +167,12 @@ class GraphBuilder:
                 )
 
                 edges.append({
-                    "source": sym_list[i],
-                    "target": sym_list[j],
+                    "source": si,
+                    "target": sj,
                     "edge_weight": weight,
-                    "return_corr": return_corr,
-                    "volume_corr": vol_corr,
-                    "directional_agreement": directional_agreement,
+                    "return_corr": float(return_corr),
+                    "volume_corr": float(vol_corr),
+                    "directional_agreement": float(directional_agreement),
                 })
 
         if not edges:
@@ -206,3 +227,16 @@ class GraphBuilder:
 
     def get_last_edges(self) -> Optional[pd.DataFrame]:
         return self._last_edges
+
+    @staticmethod
+    def _safe_corrcoef(left: np.ndarray, right: np.ndarray) -> float:
+        """Return a stable correlation value without noisy numpy warnings."""
+        if len(left) < 3 or len(right) < 3:
+            return float("nan")
+        if not np.all(np.isfinite(left)) or not np.all(np.isfinite(right)):
+            return float("nan")
+        left_std = float(np.std(left))
+        right_std = float(np.std(right))
+        if left_std == 0.0 or right_std == 0.0:
+            return float("nan")
+        return float(np.corrcoef(left, right)[0, 1])

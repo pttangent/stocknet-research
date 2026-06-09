@@ -159,7 +159,7 @@ class DashboardConfig:
 class DataSourceConfig:
     """Live data source configuration."""
     provider: str = "yahoo"  # "yahoo", "alpaca", "polygon"
-    interval: str = "1m"     # "1m", "5m", "15m"
+    interval: str = "5m"     # "1m", "5m", "15m"
     scan_mode: str = "chunked"  # "chunked", "full_parallel"
     lookback_days: int = 7   # How many days of history to fetch on init
     timeout_seconds: float = 15.0
@@ -169,14 +169,14 @@ class DataSourceConfig:
     chunk_size: int = 200    # Symbols per scan (round-robin for large universes)
     # Historical parquet for warm-up
     historical_parquet_dir: str = field(default_factory=lambda: os.path.join(
-        _MODULE_DIR, "data", "warmup_1m"
+        _MODULE_DIR, "data", "warmup_5m"
     ))
     universe_manifest_dir: str = field(default_factory=lambda: os.path.join(
-        _STOCKNET_DIR, "artifacts", "parquet_15m"
+        _STOCKNET_DIR, "artifacts", "parquet_5m"
     ))
     use_historical_warmup: bool = True
     warmup_lookback_bars: int = 100  # Number of historical bars to preload
-    archive_subdir: str = "archive_1m"
+    archive_subdir: str = "archive_5m"
     archive_metadata_name: str = "archive_manifest.csv"
 
 
@@ -190,37 +190,38 @@ class OutputConfig:
         _MODULE_DIR, "artifacts"
     ))
 
+    # 5m-only paths
     @property
     def bars_path(self) -> str:
-        return os.path.join(self.base_dir, "{date}", "1m_bars.parquet")
+        return os.path.join(self.base_dir, "{date}", "5m_bars.parquet")
 
     @property
     def snapshots_path(self) -> str:
-        return os.path.join(self.base_dir, "{date}", "community_snapshots.csv")
+        return os.path.join(self.base_dir, "{date}", "community_snapshots_5m.csv")
 
     @property
     def members_path(self) -> str:
-        return os.path.join(self.base_dir, "{date}", "community_members.csv")
+        return os.path.join(self.base_dir, "{date}", "community_members_5m.csv")
 
     @property
     def alerts_path(self) -> str:
-        return os.path.join(self.base_dir, "{date}", "live_alerts.csv")
+        return os.path.join(self.base_dir, "{date}", "live_alerts_5m.csv")
 
     @property
     def edges_path(self) -> str:
-        return os.path.join(self.base_dir, "{date}", "community_edges.csv")
+        return os.path.join(self.base_dir, "{date}", "community_edges_5m.csv")
 
     @property
     def review_path(self) -> str:
-        return os.path.join(self.artifact_dir, "{date}", "intraday_review.md")
+        return os.path.join(self.artifact_dir, "{date}", "intraday_review_5m.md")
 
     @property
     def archive_dir(self) -> str:
-        return os.path.join(self.base_dir, "archive_1m")
+        return os.path.join(self.base_dir, "archive_5m")
 
     @property
     def archive_bars_path(self) -> str:
-        return os.path.join(self.archive_dir, "date={date}", "1m_bars.parquet")
+        return os.path.join(self.archive_dir, "date={date}", "5m_bars.parquet")
 
     @property
     def archive_manifest_path(self) -> str:

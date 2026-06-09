@@ -40,6 +40,9 @@ class AlertLevel(Enum):
 
 class AlertStatus(Enum):
     BIRTH = "birth"
+    CONTINUATION = "continuation"
+    REVIVAL = "revival"
+    WEAK_CONTINUATION = "weak_continuation"
     CONFIRMATION = "confirmation"
     EXPANSION = "expansion"
     MATURITY = "maturity"
@@ -65,15 +68,26 @@ class Alert:
     member_count: int = 0
     top_members: str = ""
     prev_level: Optional[AlertLevel] = None
+    # Theme lifecycle fields
+    theme_path_id: str = ""
+    event_type: str = ""
+    match_score: float = 0.0
+    matched_previous_frequency: Optional[str] = None
+    matched_previous_community_id: Optional[str] = None
 
     def to_dict(self) -> Dict:
         return {
             "alert_id": self.alert_id,
             "timestamp": self.timestamp,
             "community_id": self.community_id,
+            "theme_path_id": self.theme_path_id,
             "level": self.level.value,
             "level_name": str(self.level),
             "status": self.status.value,
+            "event_type": self.event_type,
+            "match_score": round(self.match_score, 4),
+            "matched_previous_frequency": self.matched_previous_frequency,
+            "matched_previous_community_id": self.matched_previous_community_id,
             "trigger_reason": self.trigger_reason,
             "radar_score": round(self.radar_score, 4),
             "early_score": round(self.early_score, 4),
@@ -122,10 +136,13 @@ class AlertEngine:
 
         for _, row in communities_df.iterrows():
             comm_id = row["community_id"]
+            # Use theme_path_id as the persistent state key if available
+            theme_path_id = row.get("theme_path_id", "") or comm_id
+            state_key = theme_path_id
 
             # Get or initialize state
-            if comm_id not in self._community_states:
-                self._community_states[comm_id] = {
+            if state_key not in self._community_states:
+                self._community_states[state_key] = {
                     "first_seen": timestamp,
                     "last_seen": timestamp,
                     "windows_seen": 0,
@@ -135,13 +152,15 @@ class AlertEngine:
                     "prev_coherence": 0.0,
                     "prev_breadth": 0.0,
                     "peak_member_count": 0,
-                    "peak_coherence": 0.0,
                     "peak_breadth": 0.0,
+                    "peak_coherence": 0.0,
                     "levels_seen": set(),
                     "history": [],
+                    "community_id": comm_id,
+                    "theme_path_id": theme_path_id,
                 }
 
-            state = self._community_states[comm_id]
+            state = self._community_states[state_key]
             state["last_seen"] = timestamp
             state["windows_seen"] += 1
             state["consecutive_windows"] += 1
@@ -150,13 +169,17 @@ class AlertEngine:
             # Determine level
             level = self._determine_level(row, state, frequency)
 
-            # Determine status
+            # Determine status (prefer event_type from theme matching if available)
             status = self._determine_status(level, state, row)
 
             # Check if this is a state change worth alerting
             prev_level = state["prev_level"]
             if level != prev_level or status != AlertStatus.MATURITY:
                 self._alert_counter += 1
+                event_type = row.get("event_type", "")
+                match_score = row.get("match_score", 0.0) or 0.0
+                matched_freq = row.get("matched_previous_frequency")
+                matched_comm = row.get("matched_previous_community_id")
                 alert = Alert(
                     alert_id=f"A{self._alert_counter:04d}",
                     timestamp=timestamp,
@@ -174,6 +197,11 @@ class AlertEngine:
                     member_count=int(row.get("member_count", 0)),
                     top_members=row.get("top_members", ""),
                     prev_level=prev_level,
+                    theme_path_id=theme_path_id,
+                    event_type=event_type,
+                    match_score=match_score,
+                    matched_previous_frequency=matched_freq,
+                    matched_previous_community_id=matched_comm,
                 )
                 new_alerts.append(alert)
                 self._alerts.append(alert)
@@ -268,12 +296,42 @@ class AlertEngine:
         state: Dict,
         row: pd.Series,
     ) -> AlertStatus:
-        """Determine community lifecycle status."""
+        """Determine community lifecycle status.
+
+        Prioritizes event_type from ThemeStateManager matching over
+        raw community_id-based logic. This prevents historical themes
+        from being re-reported as birth just because their community_id
+        changed.
+        """
         if level == AlertLevel.DECAY:
             return AlertStatus.DECAY
 
-        prev = state.get("prev_level")
+        # Prefer event_type from theme state matching
+        event_type = row.get("event_type", "")
+        if event_type == "birth":
+            prev = state.get("prev_level")
+            if prev is None:
+                return AlertStatus.BIRTH
+            # If theme state says birth but we've seen this theme_path before,
+            # it might be a data inconsistency; treat as maturity
+            return AlertStatus.MATURITY
 
+        if event_type == "continuation":
+            prev = state.get("prev_level")
+            if prev is None:
+                return AlertStatus.CONTINUATION
+            if level.value > prev.value:
+                return AlertStatus.CONFIRMATION
+            return AlertStatus.CONTINUATION
+
+        if event_type == "revival":
+            return AlertStatus.REVIVAL
+
+        if event_type == "weak_continuation":
+            return AlertStatus.WEAK_CONTINUATION
+
+        # Fallback: legacy logic based on prev_level
+        prev = state.get("prev_level")
         if prev is None:
             return AlertStatus.BIRTH
 
@@ -312,9 +370,26 @@ class AlertEngine:
     ) -> str:
         """Generate human-readable trigger reason."""
         reasons = []
+        event_type = row.get("event_type", "")
+        match_score = row.get("match_score", 0.0)
+        matched_freq = row.get("matched_previous_frequency")
+        matched_comm = row.get("matched_previous_community_id")
 
         if status == AlertStatus.BIRTH:
             reasons.append(f"Birth: {row.get('member_count', 0)} members")
+
+        if status == AlertStatus.CONTINUATION:
+            reasons.append(f"Continuation (match={match_score:.2f})")
+            if matched_freq and matched_comm:
+                reasons.append(f"from {matched_freq} {matched_comm}")
+
+        if status == AlertStatus.REVIVAL:
+            reasons.append(f"Revival (match={match_score:.2f})")
+            if matched_freq and matched_comm:
+                reasons.append(f"from {matched_freq} {matched_comm}")
+
+        if status == AlertStatus.WEAK_CONTINUATION:
+            reasons.append(f"Weak continuation (match={match_score:.2f})")
 
         if status == AlertStatus.CONFIRMATION:
             prev = state.get("prev_level")
