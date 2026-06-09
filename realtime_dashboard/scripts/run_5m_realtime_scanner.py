@@ -160,7 +160,7 @@ def build_state_payload(
             "community_count": int(len(latest_5m_snapshots)),
             "alert_count": int(len(alerts_5m)),
             "top_communities": dataframe_to_records(
-                latest_5m_snapshots.sort_values("radar_score", ascending=False), limit=10
+                latest_5m_snapshots.sort_values("radar_score", ascending=False) if not latest_5m_snapshots.empty else latest_5m_snapshots, limit=10
             ),
         },
         "fifteen_minute": {
@@ -168,7 +168,7 @@ def build_state_payload(
             "community_count": int(len(latest_15m_snapshots)),
             "alert_count": int(len(alerts_15m)),
             "top_communities": dataframe_to_records(
-                latest_15m_snapshots.sort_values("radar_score", ascending=False), limit=10
+                latest_15m_snapshots.sort_values("radar_score", ascending=False) if not latest_15m_snapshots.empty else latest_15m_snapshots, limit=10
             ),
         },
     }
