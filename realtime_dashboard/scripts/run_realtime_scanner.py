@@ -246,7 +246,7 @@ def main() -> None:
     symbols, feed = initialize_history(config, args)
     warmup_df = preload_warmup(config, feed, symbols)
     archive_writer = OneMinuteArchiveWriter(config.output)
-    logger = IntradayLogger(config.output)
+    intraday_logger = IntradayLogger(config.output)
     state_writer = ScannerStateWriter(config.output)
 
     # === THEME STATE MANAGER ===
@@ -254,18 +254,17 @@ def main() -> None:
     theme_state_dir = os.path.join(config.output.artifact_dir, "theme_state")
     theme_state_manager = ThemeStateManager(state_dir=theme_state_dir)
 
-    # Warm-start from historical 15m archive if available
-    archive_15m_dir = os.path.join(config.output.base_dir, "archive_15m_from_1m")
-    if os.path.exists(archive_15m_dir):
-        logger.info("Warm-starting theme state from historical 15m archive: %s", archive_15m_dir)
-        created = theme_state_manager.warm_start_from_parquet(
-            parquet_dir=archive_15m_dir,
-            lookback_days=5,
-            frequency="15m",
+    # Warm-start: load existing active_theme_paths.json if available.
+    # Historical parquet replay is available via build_historical_theme_state.py
+    # and can be run separately for offline batch processing.
+    if theme_state_manager.paths:
+        logger.info(
+            "Loaded %d existing theme paths from %s",
+            len(theme_state_manager.paths),
+            theme_state_manager.active_path,
         )
-        logger.info("Warm-start created %d theme paths", created)
     else:
-        logger.info("No historical 15m archive found at %s; starting with empty theme state", archive_15m_dir)
+        logger.info("No existing theme state; starting fresh.")
 
     runtime_1m = FrequencyRuntime(config)
     runtime_5m = FrequencyRuntime(config)
@@ -292,7 +291,7 @@ def main() -> None:
 
         bars_df = pd.DataFrame([bar.to_dict() for bar in bars])
         archive_writer.append_bars(bars_df, provider="yahoo", interval="1m")
-        logger.log_bars(bars_df)
+        intraday_logger.log_bars(bars_df)
 
         cached_1m = feed.get_all_cached()
         latest_1m_snapshots, latest_1m_members, latest_1m_edges, alerts_1m = process_frequency(
@@ -303,11 +302,11 @@ def main() -> None:
         )
 
         if not latest_1m_snapshots.empty:
-            logger.log_snapshots(latest_1m_snapshots)
-            logger.log_members(latest_1m_members)
-            logger.log_edges(latest_1m_edges, resolve_scan_timestamp(cached_1m))
+            intraday_logger.log_snapshots(latest_1m_snapshots)
+            intraday_logger.log_members(latest_1m_members)
+            intraday_logger.log_edges(latest_1m_edges, resolve_scan_timestamp(cached_1m))
         if alerts_1m:
-            logger.log_alerts(pd.DataFrame([alert.to_dict() for alert in alerts_1m]))
+            intraday_logger.log_alerts(pd.DataFrame([alert.to_dict() for alert in alerts_1m]))
 
         latest_5m_snapshots = pd.DataFrame()
         latest_5m_members = pd.DataFrame()
@@ -322,11 +321,11 @@ def main() -> None:
                 theme_state_manager=theme_state_manager,
             )
             if not latest_5m_snapshots.empty:
-                logger.log_snapshots(latest_5m_snapshots)
-                logger.log_members(latest_5m_members)
-                logger.log_edges(latest_5m_edges, resolve_scan_timestamp(cached_5m))
+                intraday_logger.log_snapshots(latest_5m_snapshots)
+                intraday_logger.log_members(latest_5m_members)
+                intraday_logger.log_edges(latest_5m_edges, resolve_scan_timestamp(cached_5m))
             if alerts_5m:
-                logger.log_alerts(pd.DataFrame([alert.to_dict() for alert in alerts_5m]))
+                intraday_logger.log_alerts(pd.DataFrame([alert.to_dict() for alert in alerts_5m]))
 
         latest_15m_snapshots = pd.DataFrame()
         latest_15m_members = pd.DataFrame()
@@ -341,11 +340,11 @@ def main() -> None:
                 theme_state_manager=theme_state_manager,
             )
             if not latest_15m_snapshots.empty:
-                logger.log_snapshots(latest_15m_snapshots)
-                logger.log_members(latest_15m_members)
-                logger.log_edges(latest_15m_edges, resolve_scan_timestamp(cached_15m))
+                intraday_logger.log_snapshots(latest_15m_snapshots)
+                intraday_logger.log_members(latest_15m_members)
+                intraday_logger.log_edges(latest_15m_edges, resolve_scan_timestamp(cached_15m))
             if alerts_15m:
-                logger.log_alerts(pd.DataFrame([alert.to_dict() for alert in alerts_15m]))
+                intraday_logger.log_alerts(pd.DataFrame([alert.to_dict() for alert in alerts_15m]))
 
         payload = build_state_payload(
             universe=args.universe,
