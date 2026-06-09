@@ -1,0 +1,77 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+
+# Virtual environments
+.venv*/
+venv/
+env/
+
+# IDE / Editor
+.DS_Store
+.codex/
+.playwright-mcp/
+.vscode/
+.idea/
+
+# Node
+node_modules/
+
+# Large binary data files
+*.parquet
+*.parquet.gzip
+*.npy
+*.npz
+*.pt
+*.pth
+*.ckpt
+*.h5
+*.pkl
+*.pickle
+
+# Edge browser profiles
+artifacts/edge-profile*/
+
+# Symlinks to raw parquet
+artifacts/parquet_multi_res/parquet_*
+artifacts/dashboard_5m/parquet_5m
+artifacts/dashboard_30m/parquet_30m
+
+# Archives
+*.zip
+
+# Playwright / test artifacts
+test-results/
+playwright-report/
+
+# Screenshots and images
+artifacts/*.png
+artifacts/*/*.png
+
+# Temporary / log files
+artifacts/logs/
+artifacts/*.log
+artifacts/tmp_*.csv
+artifacts/*/*.log
+
+# Test / sample / subset outputs
+artifacts/*_test/
+artifacts/*_test_*/
+artifacts/*_sample/
+artifacts/*_subset/
+
+# Duplicate pipeline versions
+artifacts/*_v2/
+artifacts/*_v2_*/
+
+# Large intermediate graph snapshot data
+artifacts/graph_snapshots*/
+
+# 5m / 30m dashboards (separate from 15m primary)
+artifacts/dashboard_5m/
+artifacts/dashboard_30m/
+
+# Input artifacts
+artifacts/input_symbols.csv

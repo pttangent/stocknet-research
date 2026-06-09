@@ -1,0 +1,22 @@
+{
+  "version": 1,
+  "stage": "run_confirmation_backtest",
+  "run_id": "run_confirmation_backtest_20260608_094805",
+  "started_at": "2026-06-08T09:48:05Z",
+  "output_dir": "D:\\DEV\\stocknetwork\\StockNet\\artifacts\\confirmation_backtest_v3_causal_r2",
+  "label": "",
+  "notes": "",
+  "parameters": {
+    "parquet_root": "D:\\DEV\\stocknetwork\\StockNet\\artifacts\\parquet_15m",
+    "rotation_dir": "D:\\DEV\\stocknetwork\\StockNet\\artifacts\\rotation_detection_v2",
+    "output": "D:\\DEV\\stocknetwork\\StockNet\\artifacts\\confirmation_backtest_v3_causal_r2",
+    "benchmark": "SPY",
+    "top_themes": 3,
+    "cost_bps": 10.0,
+    "signal_mode": "causal",
+    "run_id": "",
+    "run_label": "",
+    "run_notes": ""
+  },
+  "extra": {}
+}

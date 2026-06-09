@@ -1,0 +1,27 @@
+{
+  "version": 1,
+  "stage": "build_consensus_clusters",
+  "run_id": "build_consensus_clusters_20260607_072745",
+  "started_at": "2026-06-07T07:27:45Z",
+  "output_dir": "D:\\DEV\\stocknetwork\\StockNet\\artifacts\\consensus_clusters_v2",
+  "label": "",
+  "notes": "",
+  "parameters": {
+    "parquet_root": "artifacts/parquet_15m",
+    "output": "artifacts/consensus_clusters_v2",
+    "benchmark": "SPY",
+    "window_days": 5,
+    "top_k": 10,
+    "edge_threshold": 0.15,
+    "resolution": 1.0,
+    "bootstrap_runs": 50,
+    "null_runs": 100,
+    "device": "cuda",
+    "run_id": "",
+    "run_label": "",
+    "run_notes": ""
+  },
+  "extra": {
+    "gpu_requested": true
+  }
+}

@@ -1,0 +1,224 @@
+<!doctype html>
+<html lang="zh-Hant">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Dynamic Theme Discovery Network — Interactive Research Report</title>
+    <link rel="stylesheet" href="/styles.css" />
+    <script src="https://d3js.org/d3.v7.min.js"></script>
+  </head>
+  <body>
+    <nav class="toc" id="toc">
+      <div class="toc-brand">DTDN Research</div>
+      <ul class="toc-list">
+        <li><a href="#abstract">Abstract</a></li>
+        <li><a href="#data">Data</a></li>
+        <li><a href="#network">Network</a></li>
+        <li><a href="#consensus">Consensus</a></li>
+        <li><a href="#multires">Multi-Resolution</a></li>
+        <li><a href="#null">Null Validation</a></li>
+        <li><a href="#tgnn">TGNN Results</a></li>
+        <li><a href="#lifecycle">Lifecycle</a></li>
+        <li><a href="#migration">Migration</a></li>
+      </ul>
+    </nav>
+
+    <main class="report">
+      <header class="report-header">
+        <p class="report-venue">Interactive Research Report · June 2026</p>
+        <h1>Non-Preset Dynamic Theme Discovery<br />from Intraday Correlation Networks</h1>
+        <p class="report-authors">
+          A computational study of sector emergence, consensus clustering,
+          and temporal graph neural networks on 5m/15m/30m U.S. equity bars.
+        </p>
+      </header>
+
+      <section id="abstract" class="section">
+        <h2>Abstract</h2>
+        <p class="abstract-text">
+          We construct a multi-frequency market network from 5-minute, 15-minute, and 30-minute
+          intraday returns and detect emerging equity communities without preset sector labels.
+          A bootstrap consensus procedure with GPU-accelerated correlation and Leiden community
+          detection identifies stable co-moving groups. A temporal graph neural network predicts
+          edge persistence and community survival. All experiments are validated against
+          time-shuffle and label-shuffle null models.
+        </p>
+        <div class="highlight-grid" id="abstract-highlights">
+          <div class="highlight-card">
+            <div class="highlight-value" id="hl-symbols">—</div>
+            <div class="highlight-label">Symbols analyzed</div>
+          </div>
+          <div class="highlight-card">
+            <div class="highlight-value" id="hl-dates">—</div>
+            <div class="highlight-label">Trading days</div>
+          </div>
+          <div class="highlight-card">
+            <div class="highlight-value" id="hl-consensus">—</div>
+            <div class="highlight-label">Consensus communities</div>
+          </div>
+          <div class="highlight-card">
+            <div class="highlight-value" id="hl-tgnn-ap">—</div>
+            <div class="highlight-label">TGNN edge AP</div>
+          </div>
+          <div class="highlight-card">
+            <div class="highlight-value" id="hl-null-p">—</div>
+            <div class="highlight-label">Null p-value</div>
+          </div>
+        </div>
+      </section>
+
+      <section id="data" class="section">
+        <h2>1. Data Coverage</h2>
+        <p>
+          The dataset consists of Yahoo Finance intraday bars for U.S. equities,
+          covering regular trading hours. Benchmarks (SPY, QQQ, IWM, DIA) are
+          automatically injected.
+        </p>
+        <div class="two-col">
+          <div class="figure" id="data-coverage-chart"></div>
+          <div class="figure-caption">
+            <strong>Figure 1.</strong> Coverage across frequencies. 15m is the
+            primary resolution; 5m provides early-detection sensitivity;
+            30m provides structural de-noising.
+          </div>
+        </div>
+      </section>
+
+      <section id="network" class="section">
+        <h2>2. Dynamic Network</h2>
+        <p>
+          Each snapshot is a correlation network filtered to the top-k edges
+          per node. Communities are detected with Leiden. Use the timeline to
+          observe how themes form, split, merge, and decay.
+        </p>
+        <div class="control-bar">
+          <button id="net-play" class="sci-btn">▶ Play</button>
+          <input id="net-slider" type="range" min="0" max="0" value="0" step="1" />
+          <span id="net-date" class="sci-mono">—</span>
+          <label class="sci-label">
+            Resolution
+            <select id="net-resolution">
+              <option value="15m">15m</option>
+              <option value="5m">5m</option>
+              <option value="30m">30m</option>
+            </select>
+          </label>
+        </div>
+        <div class="figure wide" id="network-chart"></div>
+        <div class="figure-caption">
+          <strong>Figure 2.</strong> Force-directed theme network. Node size
+          reflects PageRank; color reflects community membership; opacity
+          reflects confidence.
+        </div>
+      </section>
+
+      <section id="consensus" class="section">
+        <h2>3. Bootstrap Consensus</h2>
+        <p>
+          Single-run community detection is noisy. We run 50 bootstrap
+          perturbations (bar subsampling, symbol subsampling, weight noise,
+          resolution jitter) and aggregate a co-membership probability matrix.
+          Only communities that survive the bootstrap are reported.
+        </p>
+        <div class="two-col">
+          <div class="figure" id="consensus-heatmap"></div>
+          <div class="figure" id="consensus-bars"></div>
+        </div>
+        <div class="figure-caption">
+          <strong>Figure 3.</strong> Left: co-membership probability matrix
+          from bootstrap consensus. Right: mean confidence per detected
+          community.
+        </div>
+      </section>
+
+      <section id="multires" class="section">
+        <h2>4. Multi-Resolution Validation</h2>
+        <p>
+          We compare community partitions across 5m, 15m, and 30m using
+          Normalized Mutual Information (NMI). Persistent communities appear
+          in both the high-sensitivity 5m layer and the de-noised 30m layer.
+        </p>
+        <div class="two-col">
+          <div class="figure" id="multires-nmi"></div>
+          <div class="figure" id="multires-alluvial"></div>
+        </div>
+        <div class="figure-caption">
+          <strong>Figure 4.</strong> Left: cross-resolution NMI matrix.
+          Right: alluvial diagram of community membership across resolutions.
+        </div>
+      </section>
+
+      <section id="null" class="section">
+        <h2>5. Null Model Validation</h2>
+        <p>
+          To rule out spurious structure, we compare the observed persistence
+          score against 100 time-shuffle and 100 label-shuffle null
+          simulations.
+        </p>
+        <div class="figure wide" id="null-violin"></div>
+        <div class="figure-caption">
+          <strong>Figure 5.</strong> Distribution of persistence scores under
+          null models. The red line marks the observed score.
+        </div>
+      </section>
+
+      <section id="tgnn" class="section">
+        <h2>6. Temporal GNN Results</h2>
+        <p>
+          A PyTorch Geometric temporal GNN (GCNConv + GRUCell) is trained to
+          predict edge persistence and community survival. All splits are
+          chronological to prevent lookahead bias.
+        </p>
+        <div class="two-col">
+          <div class="figure" id="tgnn-roc"></div>
+          <div class="figure" id="tgnn-pr"></div>
+        </div>
+        <div class="figure-caption">
+          <strong>Figure 6.</strong> ROC and Precision-Recall curves for the
+          edge persistence task.
+        </div>
+        <div class="figure wide" id="tgnn-comparison"></div>
+        <div class="figure-caption">
+          <strong>Figure 7.</strong> Model comparison: AUC and Average
+          Precision across baselines and TGNN variants.
+        </div>
+      </section>
+
+      <section id="lifecycle" class="section">
+        <h2>7. Community Lifecycle</h2>
+        <p>
+          Each community is tracked across trading days and classified into
+          emergence, confirmation, expansion, maturity, or decay based on
+          coherence, breadth, and momentum.
+        </p>
+        <div class="figure wide" id="lifecycle-chart"></div>
+        <div class="figure-caption">
+          <strong>Figure 8.</strong> Lifecycle stage transitions over time.
+          Color indicates stage; ribbon width indicates community size.
+        </div>
+      </section>
+
+      <section id="migration" class="section">
+        <h2>8. Symbol Migration</h2>
+        <p>
+          Symbols can migrate between communities as narratives evolve. The
+          Sankey diagram shows the flow of primary memberships across the
+          top-6 most persistent themes.
+        </p>
+        <div class="figure wide" id="migration-sankey"></div>
+        <div class="figure-caption">
+          <strong>Figure 9.</strong> Cross-community symbol migration flow.
+        </div>
+      </section>
+
+      <footer class="report-footer">
+        <p>
+          Generated by the StockNet research pipeline.
+          Data source: Yahoo Finance. Not investment advice.
+        </p>
+      </footer>
+    </main>
+
+    <script type="module" src="/app.js"></script>
+  </body>
+</html>
