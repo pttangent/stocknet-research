@@ -4,16 +4,24 @@ from __future__ import annotations
 
 import argparse
 import json
+import logging
 import os
 import sys
 import time
 from datetime import datetime, UTC
+from typing import Optional
 
 import pandas as pd
 
 ROOT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if ROOT_DIR not in sys.path:
     sys.path.insert(0, ROOT_DIR)
+
+logger = logging.getLogger(__name__)
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+)
 
 from alert_engine import AlertEngine
 from community_detector import CommunityDetector
@@ -24,6 +32,7 @@ from graph_builder import GraphBuilder
 from logger import IntradayLogger, OneMinuteArchiveWriter, ScannerStateWriter
 from scoring import CommunityScorer
 from state_tracker import StateTracker
+from theme_state_manager import ThemeStateManager
 from universe import build_symbol_universe
 from scripts.initialize_live_radar import aggregate_intraday
 
@@ -67,8 +76,9 @@ def build_state_payload(
     alerts_5m: list,
     latest_15m_snapshots: pd.DataFrame,
     alerts_15m: list,
+    theme_state_manager: Optional[ThemeStateManager] = None,
 ) -> dict:
-    return {
+    payload = {
         "run_id": f"{datetime.now(UTC):%Y%m%dT%H%M%SZ}_{universe}",
         "scan_number": scan_number,
         "generated_at": datetime.now(UTC).isoformat(),
@@ -109,6 +119,32 @@ def build_state_payload(
         },
     }
 
+    # Add theme state summary if available
+    if theme_state_manager is not None:
+        active_paths = theme_state_manager.get_active_paths()
+        event_summary = theme_state_manager.get_event_summary()
+        payload["theme_state"] = {
+            "active_paths": len(active_paths),
+            "total_paths": len(theme_state_manager.paths),
+            "event_summary": event_summary,
+            "top_active_themes": [
+                {
+                    "theme_path_id": p.theme_path_id,
+                    "last_frequency": p.last_frequency,
+                    "last_community_id": p.last_community_id,
+                    "member_count": len(p.last_members),
+                    "core_members": p.core_members[:8],
+                    "last_radar_score": round(p.last_radar_score, 4),
+                    "peak_radar_score": round(p.peak_radar_score, 4),
+                    "state": p.state,
+                    "age_events": p.age_events,
+                }
+                for p in sorted(active_paths, key=lambda x: x.last_radar_score, reverse=True)[:10]
+            ],
+        }
+
+    return payload
+
 
 class FrequencyRuntime:
     def __init__(self, config: RadarConfig):
@@ -124,6 +160,7 @@ def process_frequency(
     runtime: FrequencyRuntime,
     bars_df: pd.DataFrame,
     frequency: str,
+    theme_state_manager: Optional[ThemeStateManager] = None,
 ) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, list]:
     if bars_df.empty:
         return pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), []
@@ -145,6 +182,16 @@ def process_frequency(
     communities_df["status"] = ""
     communities_df = runtime.scorer.score(communities_df, memberships_df, edges_df)
     timestamp = resolve_scan_timestamp(bars_df)
+
+    # === THEME STATE MANAGER: assign persistent theme_path_id ===
+    if theme_state_manager is not None:
+        communities_df = theme_state_manager.assign_and_update(
+            timestamp=timestamp,
+            frequency=frequency,
+            communities_df=communities_df,
+            memberships_df=memberships_df,
+        )
+
     alerts = runtime.alert_engine.process(timestamp, communities_df, memberships_df, frequency)
 
     for alert in alerts:
@@ -202,6 +249,24 @@ def main() -> None:
     logger = IntradayLogger(config.output)
     state_writer = ScannerStateWriter(config.output)
 
+    # === THEME STATE MANAGER ===
+    # Single shared instance across all frequencies for cross-scale continuity
+    theme_state_dir = os.path.join(config.output.artifact_dir, "theme_state")
+    theme_state_manager = ThemeStateManager(state_dir=theme_state_dir)
+
+    # Warm-start from historical 15m archive if available
+    archive_15m_dir = os.path.join(config.output.base_dir, "archive_15m_from_1m")
+    if os.path.exists(archive_15m_dir):
+        logger.info("Warm-starting theme state from historical 15m archive: %s", archive_15m_dir)
+        created = theme_state_manager.warm_start_from_parquet(
+            parquet_dir=archive_15m_dir,
+            lookback_days=5,
+            frequency="15m",
+        )
+        logger.info("Warm-start created %d theme paths", created)
+    else:
+        logger.info("No historical 15m archive found at %s; starting with empty theme state", archive_15m_dir)
+
     runtime_1m = FrequencyRuntime(config)
     runtime_5m = FrequencyRuntime(config)
     runtime_15m = FrequencyRuntime(config)
@@ -234,6 +299,7 @@ def main() -> None:
             runtime_1m,
             cached_1m,
             "1m",
+            theme_state_manager=theme_state_manager,
         )
 
         if not latest_1m_snapshots.empty:
@@ -253,6 +319,7 @@ def main() -> None:
                 runtime_5m,
                 cached_5m,
                 "5m",
+                theme_state_manager=theme_state_manager,
             )
             if not latest_5m_snapshots.empty:
                 logger.log_snapshots(latest_5m_snapshots)
@@ -271,6 +338,7 @@ def main() -> None:
                 runtime_15m,
                 cached_15m,
                 "15m",
+                theme_state_manager=theme_state_manager,
             )
             if not latest_15m_snapshots.empty:
                 logger.log_snapshots(latest_15m_snapshots)
@@ -290,6 +358,7 @@ def main() -> None:
             alerts_5m=alerts_5m,
             latest_15m_snapshots=latest_15m_snapshots,
             alerts_15m=alerts_15m,
+            theme_state_manager=theme_state_manager,
         )
         state_writer.write_json("current_state.json", payload)
         state_writer.write_json(
@@ -302,7 +371,7 @@ def main() -> None:
             },
         )
 
-        print(json.dumps({
+        output_summary = {
             "scan_number": scan_number,
             "latest_1m_timestamp": payload["latest_1m_timestamp"],
             "latest_5m_timestamp": payload["latest_5m_timestamp"],
@@ -312,7 +381,15 @@ def main() -> None:
             "five_minute_alerts": payload["five_minute"]["alert_count"],
             "fifteen_minute_communities": payload["fifteen_minute"]["community_count"],
             "fifteen_minute_alerts": payload["fifteen_minute"]["alert_count"],
-        }, ensure_ascii=False))
+        }
+        if "theme_state" in payload:
+            ts = payload["theme_state"]
+            output_summary["theme_state"] = {
+                "active_paths": ts.get("active_paths", 0),
+                "total_paths": ts.get("total_paths", 0),
+                "event_summary": ts.get("event_summary", {}),
+            }
+        print(json.dumps(output_summary, ensure_ascii=False, default=str))
 
         if args.warmup_only:
             break
