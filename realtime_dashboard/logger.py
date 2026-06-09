@@ -124,14 +124,14 @@ class IntradayLogger:
         return pd.DataFrame()
 
 
-class OneMinuteArchiveWriter:
-    """Persist a traceable local 1-minute archive for later replay and research."""
+class BarArchiveWriter:
+    """Persist a traceable local bar archive for later replay and research."""
 
     def __init__(self, config: Optional[OutputConfig] = None):
         self.config = config or OutputConfig()
         os.makedirs(self.config.archive_dir, exist_ok=True)
 
-    def append_bars(self, bars_df: pd.DataFrame, provider: str = "yahoo", interval: str = "1m") -> None:
+    def append_bars(self, bars_df: pd.DataFrame, provider: str = "yahoo", interval: str = "5m") -> None:
         """Append fetched bars to the archive, partitioned by session date."""
         if bars_df.empty:
             return
@@ -187,6 +187,10 @@ class OneMinuteArchiveWriter:
             combined.to_csv(path, index=False)
         else:
             manifest_row.to_csv(path, index=False)
+
+
+# Backward compatibility alias
+OneMinuteArchiveWriter = BarArchiveWriter
 
 
 class PartitionedParquetWriter:

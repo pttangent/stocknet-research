@@ -201,7 +201,7 @@ def run_scanner_once(args: argparse.Namespace) -> dict:
         cmd,
         capture_output=True,
         text=True,
-        timeout=args.scan_interval_seconds * 3 + 60,
+        timeout=args.scan_interval_seconds * 10 + 60,
     )
 
     output = {}

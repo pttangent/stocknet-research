@@ -1,4 +1,4 @@
-"""Headless realtime scanner for 1m early radar with 5m and 15m confirmation."""
+"""Headless realtime scanner with configurable early radar (1m or 5m) and 15m confirmation."""
 
 from __future__ import annotations
 
@@ -45,6 +45,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--max-scans", type=int, default=0, help="0 means run forever.")
     parser.add_argument("--scan-mode", choices=["chunked", "full_parallel"], default="full_parallel")
     parser.add_argument("--one-minute-days", type=int, default=7)
+    parser.add_argument("--enable-5m", action="store_true", help="Enable 5m as the primary radar layer.")
+    parser.add_argument("--skip-1m", action="store_true", help="Skip 1m community detection; use 5m as early radar.")
     parser.add_argument("--enable-15m", action="store_true")
     parser.add_argument("--warmup-only", action="store_true")
     return parser.parse_args()
@@ -77,6 +79,7 @@ def build_state_payload(
     latest_15m_snapshots: pd.DataFrame,
     alerts_15m: list,
     theme_state_manager: Optional[ThemeStateManager] = None,
+    skip_1m: bool = False,
 ) -> dict:
     payload = {
         "run_id": f"{datetime.now(UTC):%Y%m%dT%H%M%SZ}_{universe}",
@@ -95,14 +98,16 @@ def build_state_payload(
             str(latest_15m_snapshots["timestamp"].max()) if not latest_15m_snapshots.empty else None
         ),
         "one_minute": {
+            "enabled": not skip_1m,
             "community_count": int(len(latest_1m_snapshots)),
             "alert_count": int(len(alerts_1m)),
             "top_communities": dataframe_to_records(
                 latest_1m_snapshots.sort_values("radar_score", ascending=False), limit=10
-            ),
+            ) if not skip_1m else [],
         },
         "five_minute": {
             "enabled": True,
+            "primary_radar": skip_1m,
             "community_count": int(len(latest_5m_snapshots)),
             "alert_count": int(len(alerts_5m)),
             "top_communities": dataframe_to_records(
@@ -266,6 +271,12 @@ def main() -> None:
     else:
         logger.info("No existing theme state; starting fresh.")
 
+    # Log radar mode
+    if args.skip_1m:
+        logger.info("Radar mode: 5m primary (1m skipped) | interval=%ds | mode=%s", args.scan_interval_seconds, args.scan_mode)
+    else:
+        logger.info("Radar mode: 1m primary | interval=%ds | mode=%s", args.scan_interval_seconds, args.scan_mode)
+
     runtime_1m = FrequencyRuntime(config)
     runtime_5m = FrequencyRuntime(config)
     runtime_15m = FrequencyRuntime(config)
@@ -294,20 +305,27 @@ def main() -> None:
         intraday_logger.log_bars(bars_df)
 
         cached_1m = feed.get_all_cached()
-        latest_1m_snapshots, latest_1m_members, latest_1m_edges, alerts_1m = process_frequency(
-            runtime_1m,
-            cached_1m,
-            "1m",
-            theme_state_manager=theme_state_manager,
-        )
 
-        if not latest_1m_snapshots.empty:
-            intraday_logger.log_snapshots(latest_1m_snapshots)
-            intraday_logger.log_members(latest_1m_members)
-            intraday_logger.log_edges(latest_1m_edges, resolve_scan_timestamp(cached_1m))
-        if alerts_1m:
-            intraday_logger.log_alerts(pd.DataFrame([alert.to_dict() for alert in alerts_1m]))
+        # === 1m processing (optional) ===
+        latest_1m_snapshots = pd.DataFrame()
+        latest_1m_members = pd.DataFrame()
+        latest_1m_edges = pd.DataFrame()
+        alerts_1m = []
+        if not args.skip_1m:
+            latest_1m_snapshots, latest_1m_members, latest_1m_edges, alerts_1m = process_frequency(
+                runtime_1m,
+                cached_1m,
+                "1m",
+                theme_state_manager=theme_state_manager,
+            )
+            if not latest_1m_snapshots.empty:
+                intraday_logger.log_snapshots(latest_1m_snapshots)
+                intraday_logger.log_members(latest_1m_members)
+                intraday_logger.log_edges(latest_1m_edges, resolve_scan_timestamp(cached_1m))
+            if alerts_1m:
+                intraday_logger.log_alerts(pd.DataFrame([alert.to_dict() for alert in alerts_1m]))
 
+        # === 5m processing (primary radar when --skip-1m) ===
         latest_5m_snapshots = pd.DataFrame()
         latest_5m_members = pd.DataFrame()
         latest_5m_edges = pd.DataFrame()
@@ -358,29 +376,31 @@ def main() -> None:
             latest_15m_snapshots=latest_15m_snapshots,
             alerts_15m=alerts_15m,
             theme_state_manager=theme_state_manager,
+            skip_1m=args.skip_1m,
         )
         state_writer.write_json("current_state.json", payload)
-        state_writer.write_json(
-            "latest_alerts.json",
-            {
-                "generated_at": payload["generated_at"],
-                "alerts_1m": [alert.to_dict() for alert in alerts_1m],
-                "alerts_5m": [alert.to_dict() for alert in alerts_5m],
-                "alerts_15m": [alert.to_dict() for alert in alerts_15m],
-            },
-        )
+        alerts_payload = {
+            "generated_at": payload["generated_at"],
+            "alerts_5m": [alert.to_dict() for alert in alerts_5m],
+            "alerts_15m": [alert.to_dict() for alert in alerts_15m],
+        }
+        if not args.skip_1m:
+            alerts_payload["alerts_1m"] = [alert.to_dict() for alert in alerts_1m]
+        state_writer.write_json("latest_alerts.json", alerts_payload)
 
         output_summary = {
             "scan_number": scan_number,
+            "radar_mode": "5m_primary" if args.skip_1m else "1m_primary",
             "latest_1m_timestamp": payload["latest_1m_timestamp"],
             "latest_5m_timestamp": payload["latest_5m_timestamp"],
-            "one_minute_communities": payload["one_minute"]["community_count"],
-            "one_minute_alerts": payload["one_minute"]["alert_count"],
             "five_minute_communities": payload["five_minute"]["community_count"],
             "five_minute_alerts": payload["five_minute"]["alert_count"],
             "fifteen_minute_communities": payload["fifteen_minute"]["community_count"],
             "fifteen_minute_alerts": payload["fifteen_minute"]["alert_count"],
         }
+        if not args.skip_1m:
+            output_summary["one_minute_communities"] = payload["one_minute"]["community_count"]
+            output_summary["one_minute_alerts"] = payload["one_minute"]["alert_count"]
         if "theme_state" in payload:
             ts = payload["theme_state"]
             output_summary["theme_state"] = {

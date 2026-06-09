@@ -1,67 +1,90 @@
 """
-Build intraday review from logged session data.
+Build intraday review from logged 5m session data.
 
-This script reads the day's logged snapshots, alerts, and members
-and generates a comprehensive markdown review report.
+This script reads the day's logged 5m snapshots, alerts, and members
+and generates a comprehensive markdown review report with theme lifecycle.
 
 Usage:
-    python realtime_dashboard/scripts/build_intraday_review.py --date 2026-06-08
+    python realtime_dashboard/scripts/build_intraday_review.py --date 2026-06-10
 """
 
 import sys
 import os
+import json
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import argparse
 import pandas as pd
 from datetime import datetime
-from typing import Optional
+from typing import Optional, List, Dict, Any
 
 from logger import IntradayLogger
 from config import OutputConfig
+
+
+def load_theme_state(artifact_dir: str, date_str: str) -> Dict[str, Any]:
+    """Load theme state from scanner_state/current_state.json."""
+    state_path = os.path.join(artifact_dir, "scanner_state", "current_state.json")
+    if os.path.exists(state_path):
+        try:
+            with open(state_path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            return data.get("theme_state", {})
+        except Exception:
+            pass
+    return {}
 
 
 def build_review(
     date_str: str,
     output_config: Optional[OutputConfig] = None,
 ) -> str:
-    """Build review markdown from logged data."""
+    """Build review markdown from logged 5m data."""
 
     config = output_config or OutputConfig()
 
-    # Override date in paths
     base_dir = config.base_dir
     artifact_dir = config.artifact_dir
 
-    # Read data
-    snapshots_path = os.path.join(base_dir, date_str, "community_snapshots.csv")
-    alerts_path = os.path.join(base_dir, date_str, "live_alerts.csv")
-    members_path = os.path.join(base_dir, date_str, "community_members.csv")
+    # Read 5m data
+    snapshots_path = os.path.join(base_dir, date_str, "community_snapshots_5m.csv")
+    alerts_path = os.path.join(base_dir, date_str, "live_alerts_5m.csv")
+    members_path = os.path.join(base_dir, date_str, "community_members_5m.csv")
 
     snapshots = pd.read_csv(snapshots_path) if os.path.exists(snapshots_path) else pd.DataFrame()
     alerts = pd.read_csv(alerts_path) if os.path.exists(alerts_path) else pd.DataFrame()
     members = pd.read_csv(members_path) if os.path.exists(members_path) else pd.DataFrame()
 
+    # Load theme state for lifecycle info
+    theme_state = load_theme_state(artifact_dir, date_str)
+
     lines = [
-        f"# 📋 Intraday Review — {date_str}",
+        f"# 📋 Intraday Review — {date_str} (5m Radar)",
         "",
         "## Summary",
         "",
         f"- **Date**: {date_str}",
-        f"- **Total Community Snapshots**: {len(snapshots)}",
+        f"- **Total 5m Snapshots**: {len(snapshots)}",
         f"- **Unique Communities**: {snapshots['community_id'].nunique() if not snapshots.empty else 0}",
         f"- **Total Alerts**: {len(alerts)}",
         "",
     ]
 
-    if not snapshots.empty and "frequency" in snapshots.columns:
-        freq_counts = snapshots.groupby("frequency")["community_id"].nunique().to_dict()
+    # Theme state summary
+    if theme_state:
         lines.extend([
-            f"- **1m Active Communities**: {int(freq_counts.get('1m', 0))}",
-            f"- **5m Active Communities**: {int(freq_counts.get('5m', 0))}",
-            f"- **15m Active Communities**: {int(freq_counts.get('15m', 0))}",
+            f"- **Active Theme Paths**: {theme_state.get('active_paths', 0)}",
+            f"- **Inactive Theme Paths**: {theme_state.get('inactive_paths', 0)}",
+            f"- **Dead Theme Paths**: {theme_state.get('dead_paths', 0)}",
+            f"- **Total Theme Paths**: {theme_state.get('total_paths', 0)}",
             "",
         ])
+
+    # 5m snapshot coverage
+    if not snapshots.empty and "snapshot_timestamp" in snapshots.columns:
+        unique_snapshots = snapshots["snapshot_timestamp"].nunique()
+        lines.append(f"- **Unique 5m Snapshot Times**: {unique_snapshots}")
+        lines.append("")
 
     # Community evolution
     if not snapshots.empty and "level" in snapshots.columns:
@@ -75,6 +98,28 @@ def build_review(
             f"- **Decay**: {(max_levels <= -1).sum()}",
             "",
         ])
+
+    # Recently Dead Themes with lifecycle
+    recently_dead = theme_state.get("recently_dead_themes", [])
+    if recently_dead:
+        lines.extend([
+            "## Recently Dead Themes",
+            "",
+            "| Theme | State | First Seen | Last Active | Active Duration | Peak Radar | Core |",
+            "|-------|-------|------------|-------------|-----------------|------------|------|",
+        ])
+        for t in recently_dead:
+            tid = t.get("theme_path_id", "")
+            state = t.get("state", "")
+            first = t.get("first_seen", "")[:16] if t.get("first_seen") else ""
+            last = t.get("last_seen", "")[:16] if t.get("last_seen") else ""
+            active_snap = t.get("active_snapshots", 0)
+            active_min = t.get("active_minutes", 0)
+            duration = f"{active_min} min / {active_snap} snapshots"
+            peak = f"{t.get('peak_radar_score', 0):.3f}"
+            core = ", ".join(t.get("core_members", [])[:6])
+            lines.append(f"| {tid} | {state} | {first} | {last} | {duration} | {peak} | {core} |")
+        lines.append("")
 
     # Top communities
     if not snapshots.empty:
@@ -95,53 +140,30 @@ def build_review(
                 coh = f"{row.get('coherence', 0):.3f}"
                 brd = f"{row.get('breadth', 0):.0%}"
                 status = row.get("status", "")
+                snap_ts = row.get("snapshot_timestamp", "")
                 lines.append(f"| {rank} | {comm_id} | {theme} | {score} | {members} | {ret} | {coh} | {brd} | {status} |")
             lines.append("")
 
-    # Lead time analysis
-    if not snapshots.empty and "frequency" in snapshots.columns:
-        lead_data = []
-        for comm_id, group in snapshots.groupby("community_id"):
-            group = group.sort_values("timestamp")
-            first_1m = None
-            first_15m = None
-            for _, row in group.iterrows():
-                if row.get("frequency") == "1m" and row.get("level", 0) >= 1 and first_1m is None:
-                    first_1m = row["timestamp"]
-                if row.get("frequency") == "15m" and row.get("level", 0) >= 4 and first_15m is None:
-                    first_15m = row["timestamp"]
-            if first_1m and first_15m:
-                try:
-                    t1 = pd.to_datetime(first_1m)
-                    t15 = pd.to_datetime(first_15m)
-                    lead = (t15 - t1).total_seconds() / 60
-                    lead_data.append({
-                        "community_id": comm_id,
-                        "first_1m": first_1m,
-                        "first_15m": first_15m,
-                        "lead_time_min": lead,
-                    })
-                except:
-                    pass
-
-        if lead_data:
-            lead_df = pd.DataFrame(lead_data)
-            lines.extend([
-                "## Lead Time Analysis",
-                "",
-                f"- **Average Lead Time (1m -> 15m)**: {lead_df['lead_time_min'].mean():.1f} min",
-                f"- **Max Lead Time**: {lead_df['lead_time_min'].max():.1f} min",
-                f"- **Min Lead Time**: {lead_df['lead_time_min'].min():.1f} min",
-                "",
-                "| Community | 1m Alert | 15m Confirm | Lead Time |",
-                "|-----------|----------|-------------|-----------|",
-            ])
-            for _, row in lead_df.iterrows():
-                lines.append(
-                    f"| {row['community_id']} | {row['first_1m']} | {row['first_15m']} | "
-                    f"{row['lead_time_min']:.1f} min |"
-                )
-            lines.append("")
+    # Active themes by duration
+    top_active = theme_state.get("top_active_themes", [])
+    if top_active:
+        lines.extend([
+            "## Active Themes by Duration",
+            "",
+            "| Theme | State | Active For | Snapshots | Members | Peak Radar | Current Radar |",
+            "|-------|-------|------------|-----------|---------|------------|---------------|",
+        ])
+        for t in top_active:
+            tid = t.get("theme_path_id", "")
+            state = t.get("state", "")
+            active_min = t.get("active_minutes", 0)
+            active_snap = t.get("active_snapshots", 0)
+            duration = f"{active_min} min"
+            members = len(t.get("core_members", []))
+            peak = f"{t.get('peak_radar_score', 0):.3f}"
+            current = f"{t.get('last_radar_score', 0):.3f}"
+            lines.append(f"| {tid} | {state} | {duration} | {active_snap} | {members} | {peak} | {current} |")
+        lines.append("")
 
     # Alert timeline
     if not alerts.empty:

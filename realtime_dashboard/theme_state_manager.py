@@ -48,7 +48,7 @@ CORE_MEMBER_HISTORY_LEN = 10    # How many recent top-member snapshots to keep
 
 @dataclass
 class ThemePath:
-    """Persistent cross-time theme identity."""
+    """Persistent cross-time theme identity with lifecycle duration tracking."""
     theme_path_id: str
     theme_family: str = "unknown"
     state: str = "active"  # active | inactive | dead
@@ -67,6 +67,19 @@ class ThemePath:
     scale_states: Dict[str, Dict[str, Any]] = field(default_factory=dict)
     # History of core members over time (for stability analysis)
     core_member_history: List[List[str]] = field(default_factory=list)
+    # --- Lifecycle duration fields (new) ---
+    first_seen_snapshot: str = ""           # first 5m snapshot timestamp
+    last_seen_snapshot: str = ""            # latest 5m snapshot timestamp
+    first_observed_at: str = ""             # first time scanner observed this theme
+    last_observed_at: str = ""              # latest observation wall-clock time
+    ended_at_snapshot: str = ""             # when marked dead (snapshot time)
+    state_changed_at: str = ""              # last state transition wall-clock time
+    active_snapshot_count: int = 0          # how many 5m snapshots this theme was active
+    active_bar_count: int = 0               # alias for active_snapshot_count
+    active_minutes: int = 0                 # active_snapshot_count * 5
+    calendar_duration_minutes: int = 0      # wall-clock span from first to last snapshot
+    inactive_snapshot_count: int = 0        # snapshots since last seen
+    peak_radar_timestamp: str = ""          # when peak radar score occurred
 
     def to_dict(self) -> Dict[str, Any]:
         d = asdict(self)
@@ -75,6 +88,23 @@ class ThemePath:
     @classmethod
     def from_dict(cls, d: Dict[str, Any]) -> "ThemePath":
         return cls(**d)
+
+    def lifecycle_summary(self) -> Dict[str, Any]:
+        """Return a human-readable lifecycle summary."""
+        return {
+            "theme_path_id": self.theme_path_id,
+            "state": self.state,
+            "first_seen_snapshot": self.first_seen_snapshot,
+            "last_seen_snapshot": self.last_seen_snapshot,
+            "active_duration_minutes": self.active_minutes,
+            "active_snapshots": self.active_snapshot_count,
+            "calendar_span_minutes": self.calendar_duration_minutes,
+            "peak_radar_score": round(self.peak_radar_score, 4),
+            "peak_radar_timestamp": self.peak_radar_timestamp,
+            "ended_at": self.ended_at_snapshot or None,
+            "core_members": self.core_members[:8],
+            "member_count": len(self.last_members),
+        }
 
 
 @dataclass
@@ -349,12 +379,18 @@ class ThemeStateManager:
         frequency: str,
         row: pd.Series,
         match: ThemeMatchResult,
+        snapshot_timestamp: Optional[datetime] = None,
+        observed_at: Optional[datetime] = None,
     ) -> None:
         """Update (or create) a theme path based on current community match."""
         members = self._split_members(row.get("members"))
         top_members = self._split_members(row.get("top_members"))
         radar_score = float(row.get("radar_score", 0.0) or 0.0)
         comm_id = str(row.get("community_id", ""))
+
+        snap_ts = snapshot_timestamp or timestamp
+        obs_at = observed_at or timestamp
+        snap_ts_str = snap_ts.isoformat()
 
         if match.theme_path_id not in self.paths:
             # New birth: create fresh theme path
@@ -380,12 +416,24 @@ class ThemeStateManager:
                     }
                 },
                 core_member_history=[top_members[:CORE_MEMBER_HISTORY_LEN]],
+                # lifecycle fields
+                first_seen_snapshot=snap_ts_str,
+                last_seen_snapshot=snap_ts_str,
+                first_observed_at=obs_at.isoformat(),
+                last_observed_at=obs_at.isoformat(),
+                active_snapshot_count=1,
+                active_bar_count=1,
+                active_minutes=5,
+                calendar_duration_minutes=5,
+                inactive_snapshot_count=0,
+                peak_radar_timestamp=snap_ts_str,
             )
             self._rebuild_member_index()
             return
 
         # Update existing path
         path = self.paths[match.theme_path_id]
+        was_inactive = path.state in ("inactive", "dead")
         path.state = "active"
         path.last_seen = timestamp.isoformat()
         path.last_frequency = frequency
@@ -396,6 +444,30 @@ class ThemeStateManager:
         path.peak_radar_score = max(path.peak_radar_score, radar_score)
         path.age_events += 1
         path.inactive_events = 0  # Reset inactive counter on match
+        path.inactive_snapshot_count = 0
+
+        # Update lifecycle timestamps
+        path.last_seen_snapshot = snap_ts_str
+        path.last_observed_at = obs_at.isoformat()
+        path.active_snapshot_count += 1
+        path.active_bar_count = path.active_snapshot_count
+        path.active_minutes = path.active_snapshot_count * 5
+
+        # Calendar duration: from first_seen_snapshot to last_seen_snapshot
+        try:
+            first_dt = datetime.fromisoformat(path.first_seen_snapshot.replace("Z", "+00:00"))
+            last_dt = snap_ts
+            path.calendar_duration_minutes = int((last_dt - first_dt).total_seconds() / 60)
+        except Exception:
+            pass
+
+        # Track peak radar timestamp
+        if radar_score >= path.peak_radar_score:
+            path.peak_radar_timestamp = snap_ts_str
+
+        # State change tracking
+        if was_inactive:
+            path.state_changed_at = obs_at.isoformat()
 
         # Update scale state for this frequency
         path.scale_states[frequency] = {
@@ -412,36 +484,53 @@ class ThemeStateManager:
 
         self._rebuild_member_index()
 
-    def mark_inactive_themes(self, current_timestamp: datetime) -> List[str]:
+    def mark_inactive_themes(
+        self,
+        current_timestamp: datetime,
+        snapshot_timestamp: Optional[datetime] = None,
+    ) -> List[str]:
         """
-        Mark themes as inactive/dead if they haven't been seen recently.
-        Call this periodically (e.g., every scan cycle) to update state.
+        Mark themes as inactive/dead based on snapshot gaps (5m bars).
+        Call after processing each snapshot to update state.
 
         Returns list of theme_path_ids whose state changed.
         """
         changed = []
+        snap_ts = snapshot_timestamp or current_timestamp
+        snap_ts_str = snap_ts.isoformat()
+
         for path_id, path in self.paths.items():
             if path.state == "dead":
                 continue
 
-            last_seen = datetime.fromisoformat(path.last_seen.replace("Z", "+00:00"))
-            # Count "bars" (scan intervals) since last seen — approximate
-            # We don't know exact scan interval, so estimate ~60s per bar
-            elapsed_seconds = (current_timestamp - last_seen).total_seconds()
-            elapsed_bars = max(1, int(elapsed_seconds / 60))
+            # Use snapshot-based gap counting instead of wall-clock seconds
+            last_seen_snap = path.last_seen_snapshot or path.last_seen
+            try:
+                last_dt = datetime.fromisoformat(last_seen_snap.replace("Z", "+00:00"))
+                # Count how many 5m snapshots have passed
+                elapsed_minutes = (snap_ts - last_dt).total_seconds() / 60
+                elapsed_snapshots = max(1, int(elapsed_minutes / 5))
+            except Exception:
+                # Fallback to wall-clock if parsing fails
+                last_dt = datetime.fromisoformat(path.last_seen.replace("Z", "+00:00"))
+                elapsed_seconds = (current_timestamp - last_dt).total_seconds()
+                elapsed_snapshots = max(1, int(elapsed_seconds / 300))
 
-            # Add estimated elapsed bars to inactive_events
-            path.inactive_events = max(path.inactive_events, elapsed_bars)
+            path.inactive_snapshot_count = elapsed_snapshots
+            path.inactive_events = max(path.inactive_events, elapsed_snapshots)
 
-            if path.state == "active" and path.inactive_events >= self.theme_inactive_after:
+            if path.state == "active" and path.inactive_snapshot_count >= self.theme_inactive_after:
                 path.state = "inactive"
+                path.state_changed_at = current_timestamp.isoformat()
                 changed.append(path_id)
-                logger.info("Theme %s marked inactive (inactive %d bars)", path_id, path.inactive_events)
+                logger.info("Theme %s marked inactive (missing %d snapshots)", path_id, path.inactive_snapshot_count)
 
-            elif path.state == "inactive" and path.inactive_events >= self.theme_dead_after:
+            elif path.state == "inactive" and path.inactive_snapshot_count >= self.theme_dead_after:
                 path.state = "dead"
+                path.ended_at_snapshot = snap_ts_str
+                path.state_changed_at = current_timestamp.isoformat()
                 changed.append(path_id)
-                logger.info("Theme %s marked dead (inactive %d bars)", path_id, path.inactive_events)
+                logger.info("Theme %s marked dead (missing %d snapshots)", path_id, path.inactive_snapshot_count)
 
         return changed
 
@@ -453,10 +542,15 @@ class ThemeStateManager:
         frequency: str,
         row: pd.Series,
         match: ThemeMatchResult,
+        snapshot_timestamp: Optional[datetime] = None,
+        observed_at: Optional[datetime] = None,
     ) -> None:
         """Append a theme event to theme_events.parquet."""
+        snap_ts = snapshot_timestamp or timestamp
+        obs_at = observed_at or timestamp
         event = {
-            "timestamp": timestamp,
+            "snapshot_timestamp": snap_ts,
+            "observed_at": obs_at,
             "frequency": frequency,
             "community_id": row.get("community_id"),
             "theme_path_id": match.theme_path_id,
@@ -530,6 +624,8 @@ class ThemeStateManager:
         frequency: str,
         communities_df: pd.DataFrame,
         memberships_df: Optional[pd.DataFrame] = None,
+        snapshot_timestamp: Optional[datetime] = None,
+        observed_at: Optional[datetime] = None,
     ) -> pd.DataFrame:
         """
         For each community in the dataframe:
@@ -544,22 +640,30 @@ class ThemeStateManager:
         - match_score
         - matched_previous_frequency
         - matched_previous_community_id
+        - snapshot_timestamp
+        - observed_at
         """
         if communities_df.empty:
             return communities_df
 
         out = communities_df.copy()
+        snap_ts = snapshot_timestamp or timestamp
+        obs_at = observed_at or timestamp
 
         # Ensure columns exist
         for col in ["theme_path_id", "event_type", "match_score",
-                    "matched_previous_frequency", "matched_previous_community_id"]:
+                    "matched_previous_frequency", "matched_previous_community_id",
+                    "snapshot_timestamp", "observed_at"]:
             if col not in out.columns:
                 out[col] = None
 
+        out["snapshot_timestamp"] = snap_ts.isoformat()
+        out["observed_at"] = obs_at.isoformat()
+
         for idx, row in out.iterrows():
             match = self.match_community(timestamp, frequency, row)
-            self.update_path(timestamp, frequency, row, match)
-            self.write_event(timestamp, frequency, row, match)
+            self.update_path(timestamp, frequency, row, match, snapshot_timestamp=snap_ts, observed_at=obs_at)
+            self.write_event(timestamp, frequency, row, match, snapshot_timestamp=snap_ts, observed_at=obs_at)
 
             if memberships_df is not None and not memberships_df.empty:
                 comm_id = row.get("community_id")
@@ -575,8 +679,8 @@ class ThemeStateManager:
             out.at[idx, "matched_previous_frequency"] = match.matched_previous_frequency
             out.at[idx, "matched_previous_community_id"] = match.matched_previous_community_id
 
-        # Update inactive themes
-        self.mark_inactive_themes(timestamp)
+        # Update inactive themes using snapshot-based gap counting
+        self.mark_inactive_themes(obs_at, snapshot_timestamp=snap_ts)
         self.save()
 
         return out
@@ -713,6 +817,25 @@ class ThemeStateManager:
         """Get a specific theme path by ID."""
         return self.paths.get(theme_path_id)
 
+    def get_lifecycle_summary(self) -> Dict[str, Any]:
+        """Return lifecycle summaries for all themes (active, inactive, dead)."""
+        return {
+            "active": [p.lifecycle_summary() for p in self.paths.values() if p.state == "active"],
+            "inactive": [p.lifecycle_summary() for p in self.paths.values() if p.state == "inactive"],
+            "dead": [p.lifecycle_summary() for p in self.paths.values() if p.state == "dead"],
+        }
+
+    def get_recently_dead_themes(self, n: int = 10) -> List[ThemePath]:
+        """Return the n most recently dead themes."""
+        dead = [p for p in self.paths.values() if p.state == "dead"]
+        # Sort by ended_at descending
+        def _sort_key(p: ThemePath):
+            try:
+                return datetime.fromisoformat(p.ended_at_snapshot.replace("Z", "+00:00"))
+            except Exception:
+                return datetime.min.replace(tzinfo=UTC)
+        return sorted(dead, key=_sort_key, reverse=True)[:n]
+
     def get_event_summary(self) -> Dict[str, Any]:
         """Return summary of theme events for reporting."""
         if not os.path.exists(self.events_path):
@@ -721,7 +844,9 @@ class ThemeStateManager:
             df = pd.read_parquet(self.events_path)
             if df.empty:
                 return {}
-            latest = df.iloc[-1]["timestamp"] if "timestamp" in df.columns else None
+            # Support both old 'timestamp' and new 'snapshot_timestamp' columns
+            ts_col = "snapshot_timestamp" if "snapshot_timestamp" in df.columns else "timestamp"
+            latest = df.iloc[-1][ts_col] if ts_col in df.columns else None
             return {
                 "total_events": len(df),
                 "birth_count": int((df["event_type"] == "birth").sum()),
