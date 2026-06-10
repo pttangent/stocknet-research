@@ -37,6 +37,10 @@ if ROOT_DIR not in sys.path:
     sys.path.insert(0, ROOT_DIR)
 
 from config import RadarConfig
+try:
+    from .push_alerts_to_github import publish_runtime_artifacts
+except ImportError:
+    from push_alerts_to_github import publish_runtime_artifacts
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(
@@ -222,32 +226,23 @@ def run_scanner_once(args: argparse.Namespace) -> dict:
     return output
 
 
-def push_logs_to_github() -> bool:
-    """Push any new alert logs to the GitHub realtime-logs branch."""
+def should_publish_runtime_artifacts(scan_output: dict) -> bool:
+    """Publish only when the current scan produced alerts."""
+    return (
+        scan_output.get("one_minute_alerts", 0) > 0
+        or scan_output.get("five_minute_alerts", 0) > 0
+        or scan_output.get("fifteen_minute_alerts", 0) > 0
+    )
+
+
+def push_runtime_artifacts_to_branch() -> bool:
+    """Publish runtime artifacts to the headless runtime branch."""
     try:
-        push_script = os.path.join(
-            os.path.dirname(__file__), "push_alerts_to_github.py"
-        )
-        if not os.path.exists(push_script):
-            logger.warning("GitHub push script not found: %s", push_script)
-            return False
-
-        result = subprocess.run(
-            [sys.executable, push_script],
-            capture_output=True,
-            text=True,
-            timeout=60,
-        )
-
-        if result.returncode == 0:
-            logger.info("GitHub push successful")
-            return True
-        else:
-            logger.warning("GitHub push failed: %s", result.stderr)
-            return False
-
+        publish_runtime_artifacts()
+        logger.info("Runtime artifact publish successful")
+        return True
     except Exception as exc:
-        logger.warning("GitHub push error: %s", exc)
+        logger.warning("Runtime artifact publish error: %s", exc)
         return False
 
 
@@ -369,8 +364,6 @@ def main() -> None:
     # Main scanning loop
     scan_number = 0
     consecutive_errors = 0
-    last_github_push = datetime.min.replace(tzinfo=timezone.utc)
-
     while True:
         current = now_et()
 
@@ -393,18 +386,9 @@ def main() -> None:
 
             print_summary(scan_output, scan_number, elapsed_ms)
 
-            # GitHub push every 5 minutes or if there are alerts
             if args.github_push:
-                now_utc = datetime.now(timezone.utc)
-                has_alerts = (
-                    scan_output.get("one_minute_alerts", 0) > 0
-                    or scan_output.get("five_minute_alerts", 0) > 0
-                    or scan_output.get("fifteen_minute_alerts", 0) > 0
-                )
-                time_since_push = (now_utc - last_github_push).total_seconds()
-                if has_alerts or time_since_push >= 300:
-                    push_logs_to_github()
-                    last_github_push = now_utc
+                if should_publish_runtime_artifacts(scan_output):
+                    push_runtime_artifacts_to_branch()
 
         except Exception as exc:
             consecutive_errors += 1
@@ -444,11 +428,6 @@ def main() -> None:
 
         if sleep_time > 0:
             time.sleep(sleep_time)
-
-    # Final push after market close
-    if args.github_push:
-        logger.info("Final GitHub push after market close...")
-        push_logs_to_github()
 
     logger.info("=" * 60)
     logger.info("Continuous monitor complete. Total scans: %d", scan_number)

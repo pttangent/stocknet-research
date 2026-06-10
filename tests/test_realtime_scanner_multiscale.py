@@ -1,6 +1,7 @@
 import os
 import sys
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 
 import pandas as pd
 import pytest
@@ -16,6 +17,8 @@ from realtime_dashboard.scoring import CommunityScorer
 from realtime_dashboard.universe import build_symbol_universe
 from realtime_dashboard.scripts import run_realtime_scanner as scanner
 from realtime_dashboard.scripts import build_historical_theme_state as historical_theme_state
+from realtime_dashboard.scripts import continuous_monitor
+from realtime_dashboard.scripts import push_alerts_to_github as publisher
 from realtime_dashboard.config import RadarConfig
 
 
@@ -349,3 +352,132 @@ def test_build_symbol_universe_uses_screen_file_and_etf_exclusions(tmp_path):
 
     assert symbols == ["MSFT", "NVDA"]
     assert excluded == {"SPY"}
+
+
+def test_prepare_runtime_publish_worktree_creates_branch_checkout(tmp_path, monkeypatch):
+    calls = []
+    worktree_path = tmp_path / "runtime-worktree"
+
+    def fake_run_git(args, cwd=None, check=True):
+        calls.append(args)
+
+        class Result:
+            stdout = ""
+            returncode = 0
+
+        if args[:3] == ["worktree", "list", "--porcelain"]:
+            Result.stdout = ""
+        elif args[:2] == ["ls-remote", "--heads"]:
+            Result.stdout = "abc123\trefs/heads/realtime-scanner-headless\n"
+        return Result()
+
+    monkeypatch.setattr(publisher, "run_git", fake_run_git)
+
+    resolved = publisher.prepare_runtime_publish_worktree(
+        worktree_path=worktree_path,
+        branch="realtime-scanner-headless",
+    )
+
+    assert resolved == worktree_path
+    assert ["fetch", "origin", "realtime-scanner-headless"] in calls
+    assert [
+        "worktree",
+        "add",
+        "--force",
+        "-B",
+        "realtime-scanner-headless",
+        str(worktree_path),
+        "origin/realtime-scanner-headless",
+    ] in calls
+
+
+def test_publish_runtime_artifacts_copies_scanner_outputs_to_worktree(tmp_path, monkeypatch):
+    repo_root = tmp_path / "repo"
+    repo_root.mkdir()
+    source_file = repo_root / "realtime_dashboard" / "artifacts" / "scanner_state" / "current_state.json"
+    source_file.parent.mkdir(parents=True)
+    source_file.write_text('{"scan_number": 7}', encoding="utf-8")
+    logs_file = repo_root / "logs" / "2026-06-10" / "realtime_alerts_100000.md"
+    logs_file.parent.mkdir(parents=True)
+    logs_file.write_text("# alert", encoding="utf-8")
+
+    worktree_path = tmp_path / "publish-worktree"
+    worktree_path.mkdir()
+    (worktree_path / ".git").write_text("gitdir: fake", encoding="utf-8")
+
+    git_calls = []
+
+    def fake_prepare_runtime_publish_worktree(worktree_path=None, branch=None):
+        return worktree_path or (tmp_path / "publish-worktree")
+
+    def fake_run_git(args, cwd=None, check=True):
+        git_calls.append((args, cwd))
+
+        class Result:
+            stdout = ""
+            returncode = 1
+
+        if args[:3] == ["diff", "--cached", "--quiet"]:
+            Result.returncode = 1
+        return Result()
+
+    monkeypatch.setattr(publisher, "REPO_ROOT", str(repo_root))
+    monkeypatch.setattr(publisher, "prepare_runtime_publish_worktree", fake_prepare_runtime_publish_worktree)
+    monkeypatch.setattr(publisher, "run_git", fake_run_git)
+
+    success = publisher.publish_runtime_artifacts(
+        artifact_paths=[
+            "realtime_dashboard/artifacts/scanner_state/current_state.json",
+            "logs",
+        ],
+        worktree_path=worktree_path,
+        branch="realtime-scanner-headless",
+        commit_message="test runtime publish",
+    )
+
+    assert success is True
+    assert (worktree_path / "realtime_dashboard" / "artifacts" / "scanner_state" / "current_state.json").read_text(encoding="utf-8") == '{"scan_number": 7}'
+    assert (worktree_path / "logs" / "2026-06-10" / "realtime_alerts_100000.md").read_text(encoding="utf-8") == "# alert"
+    assert any(call[0][:2] == ["add", "--all"] for call in git_calls)
+    assert any(call[0][:2] == ["push", "origin"] for call in git_calls)
+
+
+def test_continuous_monitor_only_publishes_when_alerts_exist(monkeypatch):
+    publish_calls = []
+
+    monkeypatch.setattr(
+        continuous_monitor,
+        "publish_runtime_artifacts",
+        lambda: publish_calls.append("publish") or True,
+    )
+
+    no_alerts = {
+        "one_minute_alerts": 0,
+        "five_minute_alerts": 0,
+        "fifteen_minute_alerts": 0,
+    }
+    has_alerts = {
+        "one_minute_alerts": 0,
+        "five_minute_alerts": 2,
+        "fifteen_minute_alerts": 0,
+    }
+
+    assert continuous_monitor.should_publish_runtime_artifacts(no_alerts) is False
+    assert continuous_monitor.should_publish_runtime_artifacts(has_alerts) is True
+
+    if continuous_monitor.should_publish_runtime_artifacts(no_alerts):
+        continuous_monitor.publish_runtime_artifacts()
+    if continuous_monitor.should_publish_runtime_artifacts(has_alerts):
+        continuous_monitor.publish_runtime_artifacts()
+
+    assert publish_calls == ["publish"]
+
+
+def test_background_runner_scripts_exist_and_reference_continuous_monitor():
+    start_script = Path(ROOT) / "realtime_dashboard" / "scripts" / "start_continuous_monitor.ps1"
+    register_script = Path(ROOT) / "realtime_dashboard" / "scripts" / "register_continuous_monitor_task.ps1"
+
+    assert start_script.exists()
+    assert register_script.exists()
+    assert "continuous_monitor.py" in start_script.read_text(encoding="utf-8")
+    assert "Register-ScheduledTask" in register_script.read_text(encoding="utf-8")
