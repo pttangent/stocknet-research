@@ -220,48 +220,42 @@ def build_state_payload(
 
 
 def git_commit_state(snapshot_timestamp: Optional[datetime], scan_number: int, theme_count: int) -> None:
-    """Auto-commit scanner state to realtimes_log branch.
+    """Auto-commit scanner state + logs to current branch (unified).
 
-    Copies files to a temp dir before checkout to avoid git checkout overwriting local changes.
+    No branch switching — everything stays on the current branch.
+    Commits scanner_state/, theme_state/, and logs/ together.
     """
     try:
         import glob
-        import shutil
         repo_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-        # Collect state files and copy to temp dir before checkout
-        state_files = []
+
+        # Collect scanner state files
+        files_to_commit = []
         for subdir in ["scanner_state", "theme_state"]:
             path = os.path.join(repo_root, "realtime_dashboard", "artifacts", subdir)
             if os.path.isdir(path):
                 for ext in ["*.json", "*.csv"]:
-                    state_files.extend(glob.glob(os.path.join(path, ext)))
-        if not state_files:
+                    files_to_commit.extend(glob.glob(os.path.join(path, ext)))
+
+        # Collect today's log files
+        from datetime import date
+        today_str = date.today().isoformat()
+        logs_dir = os.path.join(repo_root, "logs", today_str)
+        if os.path.isdir(logs_dir):
+            files_to_commit.extend(glob.glob(os.path.join(logs_dir, "*.md")))
+
+        if not files_to_commit:
             return
-        # Save files to temp dir
-        tmp_dir = os.path.join(repo_root, ".git", "_scanner_state_tmp")
-        os.makedirs(tmp_dir, exist_ok=True)
-        for src in state_files:
-            dst = os.path.join(tmp_dir, os.path.basename(src))
-            shutil.copy2(src, dst)
-        # Checkout realtimes_log branch
+
+        # Stage all files
         subprocess.run(
-            ["git", "checkout", "realtimes_log"],
+            ["git", "add", "-f"] + files_to_commit,
             cwd=repo_root,
             capture_output=True,
             check=False,
         )
-        # Restore files from temp dir
-        for src in state_files:
-            dst = os.path.join(tmp_dir, os.path.basename(src))
-            if os.path.exists(dst):
-                shutil.copy2(dst, src)
-        # Stage and commit
-        subprocess.run(
-            ["git", "add", "-f"] + state_files,
-            cwd=repo_root,
-            capture_output=True,
-            check=False,
-        )
+
+        # Check if there are changes to commit
         result = subprocess.run(
             ["git", "diff", "--cached", "--quiet"],
             cwd=repo_root,
@@ -270,6 +264,7 @@ def git_commit_state(snapshot_timestamp: Optional[datetime], scan_number: int, t
         )
         if result.returncode == 0:
             return  # No changes
+
         ts_str = snapshot_timestamp.strftime("%Y%m%d_%H%M") if snapshot_timestamp else "unknown"
         msg = f"Scan {scan_number} | snapshot {ts_str} | {theme_count} themes"
         subprocess.run(
@@ -279,14 +274,172 @@ def git_commit_state(snapshot_timestamp: Optional[datetime], scan_number: int, t
             capture_output=True,
             check=False,
         )
+
+        # Push to current branch (not hardcoded)
+        branch_result = subprocess.run(
+            ["git", "rev-parse", "--abbrev-ref", "HEAD"],
+            cwd=repo_root,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        current_branch = branch_result.stdout.strip() if branch_result.returncode == 0 else "realtime-scanner-headless"
         subprocess.run(
-            ["git", "push", "origin", "realtimes_log"],
+            ["git", "push", "origin", current_branch],
             cwd=repo_root,
             capture_output=True,
             check=False,
         )
     except Exception as exc:
         logger.warning("Git auto-commit failed: %s", exc)
+
+
+def generate_alert_log(repo_root: str, payload: dict) -> Optional[str]:
+    """Generate a markdown alert log from scanner payload and theme state.
+
+    Writes to logs/{date}/realtime_alerts_{time}.md and returns the file path.
+    """
+    try:
+        from datetime import date, timezone
+
+        now = datetime.now(timezone.utc)
+        date_str = now.strftime("%Y-%m-%d")
+        time_str = now.strftime("%H%M%S")
+
+        # Read theme events
+        events_df = pd.DataFrame()
+        events_path = os.path.join(
+            repo_root, "realtime_dashboard", "artifacts", "theme_state", "theme_events.parquet"
+        )
+        if os.path.exists(events_path):
+            try:
+                events_df = pd.read_parquet(events_path)
+            except Exception:
+                pass
+
+        # Read active themes
+        active_themes: list[dict] = []
+        active_path = os.path.join(
+            repo_root, "realtime_dashboard", "artifacts", "theme_state", "active_theme_paths.json"
+        )
+        if os.path.exists(active_path):
+            try:
+                with open(active_path, "r", encoding="utf-8") as f:
+                    payload_json = json.load(f)
+                active_themes = payload_json.get("active_paths", [])
+            except Exception:
+                pass
+
+        lines = [
+            f"# Realtime Alert Log — {date_str} {now.strftime('%H:%M:%S')} UTC",
+            "",
+            "## Scan Summary",
+            "",
+        ]
+
+        scan_number = payload.get("scan_number", 0)
+        lines.append(f"- **Scan Number**: {scan_number}")
+        lines.append(f"- **Universe**: {payload.get('universe_file', 'unknown')}")
+        lines.append(f"- **Symbols**: {payload.get('symbols', 0)}")
+
+        five_min = payload.get("five_minute", {})
+        lines.append(f"- **5m**: {five_min.get('community_count', 0)} communities, {five_min.get('alert_count', 0)} alerts")
+
+        fifteen_min = payload.get("fifteen_minute", {})
+        if fifteen_min.get("enabled"):
+            lines.append(f"- **15m**: {fifteen_min.get('community_count', 0)} communities, {fifteen_min.get('alert_count', 0)} alerts")
+
+        # Theme state
+        theme_state = payload.get("theme_state", {})
+        if theme_state:
+            lines.append("")
+            lines.append("## Theme State")
+            lines.append("")
+            lines.append(f"- **Active Paths**: {theme_state.get('active_paths', 0)}")
+            lines.append(f"- **Inactive Paths**: {theme_state.get('inactive_paths', 0)}")
+            lines.append(f"- **Dead Paths**: {theme_state.get('dead_paths', 0)}")
+            lines.append(f"- **Total Paths**: {theme_state.get('total_paths', 0)}")
+            event_summary = theme_state.get("event_summary", {})
+            if event_summary:
+                lines.append(f"- **Total Events**: {event_summary.get('total_events', 0)}")
+                lines.append(f"  - Births: {event_summary.get('birth_count', 0)}")
+                lines.append(f"  - Continuations: {event_summary.get('continuation_count', 0)}")
+                lines.append(f"  - Revivals: {event_summary.get('revival_count', 0)}")
+                lines.append(f"  - Weak Continuations: {event_summary.get('weak_continuation_count', 0)}")
+
+        # Recent events
+        if not events_df.empty and "event_type" in events_df.columns:
+            lines.append("")
+            lines.append("## Recent Theme Events")
+            lines.append("")
+            lines.append("| Time | Freq | Type | Theme Path | Match | Members | Radar |")
+            lines.append("|------|------|------|------------|-------|---------|-------|")
+
+            latest = events_df.tail(20)
+            for _, row in latest.iterrows():
+                ts = str(row.get("timestamp", "")).split("+")[0]
+                freq = row.get("frequency", "")
+                etype = row.get("event_type", "")
+                tpid = row.get("theme_path_id", "")
+                match = row.get("match_score", 0.0)
+                members = row.get("member_count", 0)
+                radar = row.get("radar_score", 0.0)
+                lines.append(
+                    f"| {ts} | {freq} | {etype} | `{tpid}` | {match:.2f} | {members} | {radar:.3f} |"
+                )
+
+        # Active themes detail
+        if active_themes:
+            lines.append("")
+            lines.append("## Active Themes")
+            lines.append("")
+            for theme in active_themes[:10]:
+                tpid = theme.get("theme_path_id", "")
+                state_label = theme.get("state", "")
+                members = theme.get("member_count", 0)
+                core = ", ".join(theme.get("core_members", [])[:8])
+                radar = theme.get("last_radar_score", 0.0)
+                peak = theme.get("peak_radar_score", 0.0)
+                age = theme.get("age_events", 0)
+                lines.append(f"### `{tpid}`")
+                lines.append(f"- **State**: {state_label} | **Members**: {members} | **Age**: {age} events")
+                lines.append(f"- **Radar**: {radar:.3f} (peak: {peak:.3f})")
+                lines.append(f"- **Core**: {core}")
+                lines.append("")
+
+        # Top communities
+        top_communities = five_min.get("top_communities", [])
+        if top_communities:
+            lines.append("## Top Communities")
+            lines.append("")
+            lines.append("| Rank | Theme Path | Event | Members | Radar | Top Members |")
+            lines.append("|------|------------|-------|---------|-------|-------------|")
+            for i, comm in enumerate(top_communities[:10], 1):
+                tpid = comm.get("theme_path_id", comm.get("community_id", ""))
+                etype = comm.get("event_type", "")
+                members = comm.get("member_count", 0)
+                radar = comm.get("radar_score", 0.0)
+                top = comm.get("top_members", "")
+                lines.append(f"| {i} | `{tpid}` | {etype} | {members} | {radar:.3f} | {top} |")
+
+        lines.append("")
+        lines.append("---")
+        lines.append(f"*Auto-generated at {now.strftime('%H:%M:%S')} UTC by StockNet Realtime Scanner*")
+
+        content = "\n".join(lines)
+
+        # Write log file
+        day_dir = os.path.join(repo_root, "logs", date_str)
+        os.makedirs(day_dir, exist_ok=True)
+        log_file = os.path.join(day_dir, f"realtime_alerts_{time_str}.md")
+        with open(log_file, "w", encoding="utf-8") as f:
+            f.write(content)
+
+        logger.info("Alert log written to %s", log_file)
+        return log_file
+    except Exception as exc:
+        logger.warning("Failed to generate alert log: %s", exc)
+        return None
 
 
 def dataframe_to_records(df: pd.DataFrame, limit: int = 20) -> list[dict]:
@@ -560,7 +713,11 @@ def main() -> None:
             alerts_payload["alerts_15m"] = [alert.to_dict() for alert in alerts_15m]
         state_writer.write_json("latest_alerts.json", alerts_payload)
 
-        # Auto-commit state to realtimes_log branch
+        # Generate alert log markdown
+        repo_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+        generate_alert_log(repo_root, payload)
+
+        # Auto-commit state + logs to current branch (unified)
         theme_count = payload.get("theme_state", {}).get("total_paths", 0)
         git_commit_state(snapshot_ts, scan_number, theme_count)
 
