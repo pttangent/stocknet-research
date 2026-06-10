@@ -1,7 +1,7 @@
 param(
-    [string]$Universe = "core_500",
+    [string]$Universe = "full_market",
     [int]$Workers = 64,
-    [string]$ScanMode = "full_parallel",
+    [string]$ScanMode = "chunked",
     [switch]$Enable15m = $true,
     [switch]$PublishRuntime = $true
 )

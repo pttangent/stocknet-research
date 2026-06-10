@@ -59,3 +59,17 @@ Verified sample comparison highlights:
 
 - `static_graph_logistic` AUC `0.731427`
 - `tgnn_snapshot` AUC `0.729531`
+
+## Realtime alpha validation
+
+Use the headless scanner as the live theme source, then validate lead-lag alpha from `1m` bars.
+
+```powershell
+python stocknet_alpha/data/resample_bars.py --date 2026-06-09 --from 1m --to 5m
+python stocknet_alpha/data/resample_bars.py --date 2026-06-09 --from 1m --to 15m
+python stocknet_alpha/theme/build_theme_candidates.py --date 2026-06-09
+python stocknet_alpha/leadlag/generate_signals.py --date 2026-06-09
+python stocknet_alpha/backtest/backtest_signals.py --date 2026-06-09
+```
+
+If `data/raw_1m/date=<date>/bars_1m.parquet` is missing, the resample step falls back to the scanner archive in `realtime_dashboard/data/archive_5m` and extracts only rows tagged with `archive_interval = 1m`.

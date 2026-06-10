@@ -67,6 +67,32 @@ npm run research:full-pipeline -- \
   --output-root artifacts/full_run_multi
 ```
 
+### Realtime Scanner + Alpha Validation
+
+The headless scanner now runs from `main`, publishes runtime artifacts to `realtime-scanner-headless`, and feeds a minimal `1m -> 5m / 15m -> lead-lag` alpha pipeline.
+
+Default universe files:
+
+- stock universe: `D:\DEV\stocknetwork\P123_Screen_0_20260606.csv`
+- ETF / CEF exclusions: `D:\DEV\stocknetwork\P123_ETFCEF.csv`
+
+Background monitor on Windows:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File realtime_dashboard/scripts/register_continuous_monitor_task.ps1
+Start-ScheduledTask -TaskName StockNetContinuousMonitor
+```
+
+Alpha validation flow:
+
+```powershell
+python stocknet_alpha/data/resample_bars.py --date 2026-06-09 --from 1m --to 5m
+python stocknet_alpha/data/resample_bars.py --date 2026-06-09 --from 1m --to 15m
+python stocknet_alpha/theme/build_theme_candidates.py --date 2026-06-09
+python stocknet_alpha/leadlag/generate_signals.py --date 2026-06-09
+python stocknet_alpha/backtest/backtest_signals.py --date 2026-06-09
+```
+
 ## Pipeline Modes
 
 ### `single-resolution`
