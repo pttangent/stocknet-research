@@ -124,6 +124,9 @@ class CommunityDetector:
             members = list(members)
             if len(members) < self.config.min_community_size:
                 continue
+            if len(members) > getattr(self.config, "max_community_size", 100):
+                logger.warning("Oversized community C%03d with %d members skipped", self._community_counter + 1, len(members))
+                continue
 
             self._community_counter += 1
             comm_id = f"C{self._community_counter:03d}"

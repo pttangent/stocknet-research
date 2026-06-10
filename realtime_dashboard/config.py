@@ -67,9 +67,10 @@ class GraphConfig:
     min_directional_agreement: float = 0.7
     edge_weight_formula: str = "0.5*rc + 0.3*vc + 0.2*da"
     # Louvain / Leiden
-    resolution: float = 1.0
+    resolution: float = 10.0
     min_community_size: int = 4
-    min_edge_density: float = 0.1
+    max_community_size: int = 60
+    min_edge_density: float = 0.2
 
 
 @dataclass

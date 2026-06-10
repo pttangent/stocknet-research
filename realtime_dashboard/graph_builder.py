@@ -97,8 +97,24 @@ class GraphBuilder:
         if returns_pivot.shape[1] < 2:
             return pd.DataFrame()
 
-        # --- Correlation matrix (vectorized) ---
-        corr_mat = returns_pivot.corr()
+        # --- Subtract market beta (SPY/QQQ proxy) to get residual returns ---
+        # This prevents Louvain from clustering everything into a giant
+        # "whole market" community driven by common beta exposure.
+        benchmarks = ["SPY", "QQQ"]
+        market_returns = None
+        for bench in benchmarks:
+            if bench in returns_pivot.columns:
+                market_returns = returns_pivot[bench]
+                break
+        if market_returns is not None:
+            # Demean each symbol's return by subtracting market return
+            residual_returns = returns_pivot.sub(market_returns, axis=0)
+        else:
+            # Fallback: demean cross-sectionally (subtract mean return at each timestamp)
+            residual_returns = returns_pivot.sub(returns_pivot.mean(axis=1), axis=0)
+
+        # --- Correlation matrix on RESIDUAL returns (vectorized) ---
+        corr_mat = residual_returns.corr()
 
         # --- Volume correlation (vectorized) ---
         vol_corr_mat = None
@@ -112,73 +128,69 @@ class GraphBuilder:
                 vol_pivot = vol_pivot[common_syms]
                 vol_corr_mat = vol_pivot.corr()
 
-        # --- Directional agreement (vectorized) ---
-        sign_pivot = np.sign(returns_pivot)
-        # For each pair, mean of matching signs
+        # --- Directional agreement on RESIDUAL returns (vectorized) ---
+        sign_pivot = np.sign(residual_returns)
         n = len(sign_pivot)
         if n > 0:
-            # directional_agreement[i,j] = mean(sign_i == sign_j)
-            # Compute via dot product of boolean matrix
-            sign_bool = (sign_pivot.values == 1).astype(float)  # up = 1, down/flat = 0
-            # But we need exact match of signs (-1, 0, 1)
-            # Use: agreement = count(equal) / total
-            # Vectorized: for each pair of columns
-            cols = sign_pivot.columns.tolist()
-            da_values = {}
-            for i, si in enumerate(cols):
-                for j, sj in enumerate(cols):
-                    if i >= j:
-                        continue
-                    da_values[(si, sj)] = (sign_pivot[si] == sign_pivot[sj]).mean()
+            vals = sign_pivot.values
+            agreement_mat = np.zeros((vals.shape[1], vals.shape[1]))
+            for k in range(vals.shape[1]):
+                agreement_mat[k, :] = (vals == vals[:, k:k+1]).mean(axis=0)
+            da_df = pd.DataFrame(agreement_mat, index=sign_pivot.columns, columns=sign_pivot.columns)
         else:
-            da_values = {}
+            da_df = pd.DataFrame(0.5, index=corr_mat.columns, columns=corr_mat.columns)
 
-        # --- Build edges from correlation matrix ---
-        edges = []
-        syms = corr_mat.columns.tolist()
-        for i in range(len(syms)):
-            for j in range(i + 1, len(syms)):
-                si, sj = syms[i], syms[j]
-                return_corr = corr_mat.iloc[i, j]
-                if pd.isna(return_corr):
-                    continue
+        # --- Build edges from correlation matrix (vectorized) ---
+        # Extract upper triangle (i < j) from corr_mat
+        mask = np.triu(np.ones(corr_mat.shape, dtype=bool), k=1)
+        # Rename axes to avoid column name collision in reset_index
+        rc = corr_mat.rename_axis(index="source", columns="target").where(mask).stack().reset_index(name="return_corr")
+        rc = rc.dropna(subset=["return_corr"])
 
-                vol_corr = 0.0
-                if vol_corr_mat is not None and si in vol_corr_mat.columns and sj in vol_corr_mat.columns:
-                    vc = vol_corr_mat.loc[si, sj]
-                    if not pd.isna(vc):
-                        vol_corr = float(vc)
+        # Merge volume correlation (use its own mask since shape may differ)
+        if vol_corr_mat is not None:
+            vmask = np.triu(np.ones(vol_corr_mat.shape, dtype=bool), k=1)
+            vc = vol_corr_mat.rename_axis(index="source", columns="target").where(vmask).stack().reset_index(name="volume_corr")
+            rc = rc.merge(vc, on=["source", "target"], how="left")
+        else:
+            rc["volume_corr"] = 0.0
+        rc["volume_corr"] = rc["volume_corr"].fillna(0.0)
 
-                directional_agreement = da_values.get((si, sj), 0.5)
+        # Merge directional agreement (use its own mask since shape may differ)
+        damask = np.triu(np.ones(da_df.shape, dtype=bool), k=1)
+        da = da_df.rename_axis(index="source", columns="target").where(damask).stack().reset_index(name="directional_agreement")
+        rc = rc.merge(da, on=["source", "target"], how="left")
+        rc["directional_agreement"] = rc["directional_agreement"].fillna(0.5)
 
-                # Apply thresholds
-                passes = (
-                    abs(return_corr) >= self.config.min_return_corr
-                    or abs(vol_corr) >= self.config.min_volume_corr
-                    or directional_agreement >= self.config.min_directional_agreement
-                )
-                if not passes:
-                    continue
+        # Apply strict thresholds: require BOTH high return corr AND
+        # at least one supporting signal (vol_corr or directional_agreement)
+        rc["passes"] = (
+            rc["return_corr"].abs() >= self.config.min_return_corr
+        ) & (
+            (
+                rc["volume_corr"].abs() >= self.config.min_volume_corr
+            ) | (
+                rc["directional_agreement"] >= self.config.min_directional_agreement
+            )
+        )
+        rc = rc[rc["passes"]].copy()
 
-                weight = (
-                    0.5 * abs(return_corr)
-                    + 0.3 * abs(vol_corr)
-                    + 0.2 * directional_agreement
-                )
-
-                edges.append({
-                    "source": si,
-                    "target": sj,
-                    "edge_weight": weight,
-                    "return_corr": float(return_corr),
-                    "volume_corr": float(vol_corr),
-                    "directional_agreement": float(directional_agreement),
-                })
-
-        if not edges:
+        if rc.empty:
             return pd.DataFrame()
 
-        return pd.DataFrame(edges)
+        # Compute weight and finalize
+        rc["edge_weight"] = (
+            0.5 * rc["return_corr"].abs()
+            + 0.3 * rc["volume_corr"].abs()
+            + 0.2 * rc["directional_agreement"]
+        )
+
+        edges = rc[["source", "target", "edge_weight", "return_corr", "volume_corr", "directional_agreement"]].copy()
+        edges["return_corr"] = edges["return_corr"].astype(float)
+        edges["volume_corr"] = edges["volume_corr"].astype(float)
+        edges["directional_agreement"] = edges["directional_agreement"].astype(float)
+
+        return edges
 
     def _build_edges_from_features(self, features_df: pd.DataFrame) -> pd.DataFrame:
         """Fallback: build edges from feature similarity."""

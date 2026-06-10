@@ -250,6 +250,13 @@ def process_snapshot(
     if features_df.empty:
         return pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), []
 
+    # Skip if all returns are near-zero (market closed / flat data)
+    if "return_1m" in features_df.columns:
+        abs_returns = features_df["return_1m"].abs()
+        if abs_returns.max() < 1e-6:
+            print(f"  [skip] all returns near-zero at {snapshot_timestamp}")
+            return pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), []
+
     nodes_df, edges_df = runtime.graph_builder.build_graph(features_df, window_bars_df)
     if nodes_df.empty or edges_df.empty:
         return pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), []
@@ -364,17 +371,35 @@ def main() -> None:
         scan_number += 1
         observed_at = datetime.now(UTC)
 
-        bars = feed.get_latest_bars()
-        if not bars:
+        # === POLL ALL CHUNKS in one scan ===
+        all_bars: list = []
+        chunk_loops = 0
+        max_chunk_loops = 50  # safety limit
+        while chunk_loops < max_chunk_loops:
+            chunk_bars = feed.get_latest_bars()
+            if not chunk_bars:
+                break
+            all_bars.extend(chunk_bars)
+            chunk_loops += 1
+            # In chunked mode, stop when we've cycled through all chunks
+            if args.scan_mode == "chunked":
+                progress = feed.get_chunk_progress()
+                if progress[1] > 0 and progress[0] >= progress[1]:
+                    break
+            else:
+                break  # full_parallel: single pass
+
+        if not all_bars:
             print(f"[scan {scan_number}] no new bars; sleeping {args.scan_interval_seconds}s")
             if args.warmup_only:
                 break
             time.sleep(args.scan_interval_seconds)
             continue
 
-        bars_df = pd.DataFrame([bar.to_dict() for bar in bars])
+        bars_df = pd.DataFrame([bar.to_dict() for bar in all_bars])
         archive_writer.append_bars(bars_df, provider="yahoo", interval="5m")
         intraday_logger.log_bars(bars_df)
+        print(f"[scan {scan_number}] fetched {len(all_bars)} bars from {chunk_loops} chunk(s)")
 
         cached_5m = feed.get_all_cached()
 
