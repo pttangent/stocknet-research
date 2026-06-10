@@ -93,6 +93,11 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
     )
     parser.add_argument(
+        "--enable-5m",
+        action="store_true",
+        help="Run the 5m scanner layer alongside the 1m radar.",
+    )
+    parser.add_argument(
         "--github-push",
         action="store_true",
         help="Push alert logs to GitHub realtime-logs branch.",
@@ -198,6 +203,8 @@ def run_scanner_once(args: argparse.Namespace) -> dict:
     ]
     if args.enable_15m:
         cmd.append("--enable-15m")
+    if args.enable_5m:
+        cmd.append("--enable-5m")
 
     logger.debug("Running: %s", " ".join(cmd))
 

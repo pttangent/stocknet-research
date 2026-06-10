@@ -1,9 +1,14 @@
 from __future__ import annotations
 
 import argparse
+import sys
 from pathlib import Path
 
 import pandas as pd
+
+ROOT_DIR = Path(__file__).resolve().parents[2]
+if str(ROOT_DIR) not in sys.path:
+    sys.path.insert(0, str(ROOT_DIR))
 
 from stocknet_alpha.config import AlphaPaths, load_universe_symbols
 
@@ -48,8 +53,9 @@ def resample_ohlcv_bars(bars: pd.DataFrame, target_interval: str) -> pd.DataFram
         aggregated["symbol"] = symbol
         if "vwap" in group.columns:
             weighted = (indexed["close"] * indexed["volume"]).resample(rule, label="right", closed="left").sum()
-            volume = indexed["volume"].resample(rule, label="right", closed="left").sum().replace(0, pd.NA)
-            aggregated["vwap"] = (weighted / volume).astype(float)
+            volume = indexed["volume"].resample(rule, label="right", closed="left").sum().astype(float)
+            volume = volume.where(volume != 0)
+            aggregated["vwap"] = weighted.astype(float).div(volume)
         if "source" in group.columns:
             aggregated["source"] = indexed["source"].resample(rule, label="right", closed="left").last()
         result_frames.append(aggregated.reset_index())

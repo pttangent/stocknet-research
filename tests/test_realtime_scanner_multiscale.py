@@ -51,6 +51,28 @@ def test_build_state_payload_includes_5m_section():
     assert payload["fifteen_minute"]["community_count"] == 1
 
 
+def test_build_state_payload_handles_missing_radar_score_columns():
+    one = pd.DataFrame([{"timestamp": "2026-06-09 15:59:00+00:00", "community_id": "C001"}])
+    five = pd.DataFrame([{"timestamp": "2026-06-09 16:00:00+00:00", "community_id": "C002"}])
+    fifteen = pd.DataFrame([{"timestamp": "2026-06-09 16:00:00+00:00", "community_id": "C003"}])
+
+    payload = scanner.build_state_payload(
+        universe="full_market",
+        scan_mode="chunked",
+        symbols=3824,
+        scan_number=1,
+        latest_1m_snapshots=one,
+        alerts_1m=[],
+        latest_5m_snapshots=five,
+        alerts_5m=[],
+        latest_15m_snapshots=fifteen,
+        alerts_15m=[],
+    )
+
+    assert payload["five_minute"]["top_communities"][0]["community_id"] == "C002"
+    assert payload["fifteen_minute"]["top_communities"][0]["community_id"] == "C003"
+
+
 def test_resolve_scan_timestamp_prefers_latest_complete_bar():
     bars_df = pd.DataFrame(
         [
@@ -479,5 +501,9 @@ def test_background_runner_scripts_exist_and_reference_continuous_monitor():
 
     assert start_script.exists()
     assert register_script.exists()
-    assert "continuous_monitor.py" in start_script.read_text(encoding="utf-8")
-    assert "Register-ScheduledTask" in register_script.read_text(encoding="utf-8")
+    start_text = start_script.read_text(encoding="utf-8")
+    register_text = register_script.read_text(encoding="utf-8")
+
+    assert "continuous_monitor.py" in start_text
+    assert "--enable-5m" in start_text
+    assert "Register-ScheduledTask" in register_text

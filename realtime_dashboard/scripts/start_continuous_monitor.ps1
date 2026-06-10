@@ -2,6 +2,7 @@ param(
     [string]$Universe = "full_market",
     [int]$Workers = 64,
     [string]$ScanMode = "chunked",
+    [switch]$Enable5m = $true,
     [switch]$Enable15m = $true,
     [switch]$PublishRuntime = $true
 )
@@ -22,6 +23,10 @@ $args = @(
 
 if ($Enable15m) {
     $args += "--enable-15m"
+}
+
+if ($Enable5m) {
+    $args += "--enable-5m"
 }
 
 if ($PublishRuntime) {

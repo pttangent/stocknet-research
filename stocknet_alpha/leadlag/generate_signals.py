@@ -1,15 +1,40 @@
 from __future__ import annotations
 
 import argparse
+import sys
 from pathlib import Path
 from typing import Iterable
 
 import numpy as np
 import pandas as pd
 
+ROOT_DIR = Path(__file__).resolve().parents[2]
+if str(ROOT_DIR) not in sys.path:
+    sys.path.insert(0, str(ROOT_DIR))
+
 from stocknet_alpha.config import AlphaPaths
 from stocknet_alpha.data.resample_bars import load_raw_1m_bars
 from stocknetwork.features import compute_leadlag_scores
+
+
+SIGNAL_COLUMNS = [
+    "trade_date",
+    "signal_timestamp",
+    "theme_path_id",
+    "community_id",
+    "leader_symbol",
+    "follower_symbol",
+    "lag_minutes",
+    "leadlag_score",
+    "best_lag_correlation",
+    "confirmed_on_15m",
+    "theme_score",
+    "forward_return_1m",
+    "forward_return_3m",
+    "forward_return_5m",
+    "forward_return_10m",
+    "forward_return_15m",
+]
 
 
 def generate_leadlag_signals(
@@ -24,7 +49,7 @@ def generate_leadlag_signals(
     """Turn scanner themes into leader-follower 1m signals with forward returns."""
 
     if bars_1m.empty or candidates.empty:
-        return pd.DataFrame()
+        return pd.DataFrame(columns=SIGNAL_COLUMNS)
 
     bars = bars_1m.copy()
     bars["timestamp"] = pd.to_datetime(bars["timestamp"], utc=True)
@@ -102,8 +127,12 @@ def generate_leadlag_signals(
             signal_rows.append(row)
 
     if not signal_rows:
-        return pd.DataFrame()
-    return pd.DataFrame(signal_rows).sort_values(
+        return pd.DataFrame(columns=SIGNAL_COLUMNS)
+    frame = pd.DataFrame(signal_rows)
+    for column in SIGNAL_COLUMNS:
+        if column not in frame.columns:
+            frame[column] = np.nan
+    return frame.sort_values(
         ["signal_timestamp", "theme_score", "leadlag_score"],
         ascending=[True, False, False],
     ).reset_index(drop=True)
@@ -191,4 +220,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-

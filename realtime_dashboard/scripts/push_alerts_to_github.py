@@ -27,6 +27,11 @@ REPO_ROOT = Path(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath
 RUNTIME_BRANCH = "realtime-scanner-headless"
 DEFAULT_WORKTREE_PATH = REPO_ROOT / ".runtime_publish" / RUNTIME_BRANCH
 RUNTIME_ARTIFACT_PATHS = [
+    "data/bars_5m",
+    "data/bars_15m",
+    "data/theme_candidates",
+    "data/leadlag_signals",
+    "data/alpha_backtests",
     "realtime_dashboard/artifacts/scanner_state",
     "realtime_dashboard/artifacts/theme_state",
     "logs",

@@ -83,6 +83,18 @@ def dataframe_to_records(df: pd.DataFrame, limit: int = 20) -> list[dict]:
     return df.head(limit).to_dict("records")
 
 
+def snapshot_records(df: pd.DataFrame, limit: int = 20) -> list[dict]:
+    """Safely serialize community snapshots even when scoring columns are absent."""
+    if df.empty:
+        return []
+    frame = df.copy()
+    if "radar_score" in frame.columns:
+        frame = frame.sort_values("radar_score", ascending=False)
+    elif "timestamp" in frame.columns:
+        frame = frame.sort_values("timestamp", ascending=False)
+    return dataframe_to_records(frame, limit=limit)
+
+
 def build_state_payload(
     universe: str,
     scan_mode: str,
@@ -117,26 +129,20 @@ def build_state_payload(
             "enabled": not skip_1m,
             "community_count": int(len(latest_1m_snapshots)),
             "alert_count": int(len(alerts_1m)),
-            "top_communities": dataframe_to_records(
-                latest_1m_snapshots.sort_values("radar_score", ascending=False), limit=10
-            ) if not skip_1m else [],
+            "top_communities": snapshot_records(latest_1m_snapshots, limit=10) if not skip_1m else [],
         },
         "five_minute": {
             "enabled": True,
             "primary_radar": skip_1m,
             "community_count": int(len(latest_5m_snapshots)),
             "alert_count": int(len(alerts_5m)),
-            "top_communities": dataframe_to_records(
-                latest_5m_snapshots.sort_values("radar_score", ascending=False), limit=10
-            ),
+            "top_communities": snapshot_records(latest_5m_snapshots, limit=10),
         },
         "fifteen_minute": {
             "enabled": True,
             "community_count": int(len(latest_15m_snapshots)),
             "alert_count": int(len(alerts_15m)),
-            "top_communities": dataframe_to_records(
-                latest_15m_snapshots.sort_values("radar_score", ascending=False), limit=10
-            ),
+            "top_communities": snapshot_records(latest_15m_snapshots, limit=10),
         },
     }
 

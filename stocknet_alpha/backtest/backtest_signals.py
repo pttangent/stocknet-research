@@ -1,10 +1,15 @@
 from __future__ import annotations
 
 import argparse
+import sys
 from pathlib import Path
 from typing import Iterable
 
 import pandas as pd
+
+ROOT_DIR = Path(__file__).resolve().parents[2]
+if str(ROOT_DIR) not in sys.path:
+    sys.path.insert(0, str(ROOT_DIR))
 
 from stocknet_alpha.config import AlphaPaths
 
@@ -66,6 +71,8 @@ def write_backtest_artifacts(
 
 def load_signals(paths: AlphaPaths, trade_date: str, input_path: Path | str | None = None) -> pd.DataFrame:
     source = Path(input_path).expanduser().resolve() if input_path else paths.signals_path(trade_date)
+    if not source.exists():
+        return pd.DataFrame()
     return pd.read_parquet(source)
 
 
