@@ -148,6 +148,17 @@ def build_symbol_universe(
     if universe_file and os.path.exists(universe_file):
         return build_symbol_universe_from_file(config, universe_file, include_benchmarks)
 
+    default_universe_file = config.universe.universe_csv
+    if universe in {"core_500", "full_market"} and default_universe_file and os.path.exists(default_universe_file):
+        symbols, excluded_symbols = build_symbol_universe_from_file(
+            config,
+            default_universe_file,
+            include_benchmarks,
+        )
+        if universe == "core_500":
+            symbols = symbols[: config.universe.core_pool_size]
+        return symbols, excluded_symbols
+
     ds = config.data_source
     if universe == "full_market":
         manifest_path = os.path.join(ds.universe_manifest_dir, "_manifest.csv")

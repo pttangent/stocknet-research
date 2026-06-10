@@ -46,10 +46,12 @@ class CommunityScorer:
                 df[f"{col}_z"] = (df[col] - mean) / std
 
         # Edge growth (vs previous window)
-        df["edge_growth_z"] = self._compute_edge_growth(df, edges_df)
+        df["edge_growth"] = self._compute_edge_growth_raw(df, edges_df)
+        df["edge_growth_z"] = self._zscore(df["edge_growth"])
 
         # Member stability (vs previous window)
-        df["member_stability_z"] = self._compute_member_stability(df)
+        df["member_stability"] = self._compute_member_stability_raw(df)
+        df["member_stability_z"] = self._zscore(df["member_stability"])
 
         # RadarScore
         df["radar_score"] = self._compute_weighted_score(
@@ -103,7 +105,13 @@ class CommunityScorer:
 
         return score
 
-    def _compute_edge_growth(
+    @staticmethod
+    def _zscore(values: pd.Series) -> pd.Series:
+        mean = values.mean()
+        std = values.std() or 1.0
+        return (values - mean) / std
+
+    def _compute_edge_growth_raw(
         self,
         df: pd.DataFrame,
         edges_df: pd.DataFrame,
@@ -141,12 +149,9 @@ class CommunityScorer:
                 growth = 0.0
             result.loc[idx] = growth
 
-        # Z-score
-        mean = result.mean()
-        std = result.std() or 1.0
-        return (result - mean) / std
+        return result
 
-    def _compute_member_stability(self, df: pd.DataFrame) -> pd.Series:
+    def _compute_member_stability_raw(self, df: pd.DataFrame) -> pd.Series:
         """Compute member overlap with previous window.
 
         Falls back to theme_path_id matching if community_id doesn't match,
@@ -183,10 +188,7 @@ class CommunityScorer:
 
             result.loc[idx] = stability
 
-        # Z-score
-        mean = result.mean()
-        std = result.std() or 1.0
-        return (result - mean) / std
+        return result
 
     def get_history(self) -> List[pd.DataFrame]:
         """Get scoring history for trend analysis."""

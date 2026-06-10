@@ -29,6 +29,9 @@ class UniverseConfig:
     min_dollar_volume: float = 5_000_000  # min avg dollar volume
     exclude_etf_cef: bool = True
     keep_benchmark_symbols: bool = False
+    universe_csv: str = field(default_factory=lambda: os.path.join(
+        _WORKSPACE_DIR, "P123_Screen_0_20260606.csv"
+    ))
     exclude_symbol_csv: str = field(default_factory=lambda: os.path.join(
         _WORKSPACE_DIR, "P123_ETFCEF.csv"
     ))
@@ -67,9 +70,10 @@ class GraphConfig:
     min_directional_agreement: float = 0.7
     edge_weight_formula: str = "0.5*rc + 0.3*vc + 0.2*da"
     # Louvain / Leiden
-    resolution: float = 1.0
+    resolution: float = 10.0
     min_community_size: int = 4
-    min_edge_density: float = 0.1
+    max_community_size: int = 60
+    min_edge_density: float = 0.2
 
 
 @dataclass

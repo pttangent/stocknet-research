@@ -7,17 +7,14 @@ meant to run as a continuous process, not as a dashboard app.
 
 ## Branch Strategy
 
-This branch is the long-lived code branch for realtime scanning:
+The intended operating model is:
 
-- branch: `realtime-scanner-headless`
+- `main` holds the scanner code and future alpha/backtest development
+- `realtime-scanner-headless` receives runtime artifacts published from the live scanner
 
-Runtime scans do **not** create a new Git branch each time. That would be noisy,
-slow, and hard to manage because scans are frequent and data-heavy. Instead:
-
-- code changes live on the branch
-- each scanner session writes a `run_id`
-- operational outputs are stored under local `data/` and `artifacts/`
-- Git is used for code lineage, not minute-by-minute runtime data
+The live scanner should run from `main` and publish artifacts into the headless
+branch through a dedicated git worktree. It should not switch the live checkout
+while the monitor is running.
 
 ## What This Scanner Does
 
@@ -78,6 +75,23 @@ python realtime_dashboard/scripts/run_realtime_scanner.py --universe core_500 --
 python realtime_dashboard/scripts/run_realtime_scanner.py --universe full_market --scan-mode chunked --scan-interval-seconds 60 --enable-15m
 ```
 
+### 3. Run it as a background monitor on Windows
+
+Interactive start:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File realtime_dashboard/scripts/start_continuous_monitor.ps1
+```
+
+Register a background task at logon:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File realtime_dashboard/scripts/register_continuous_monitor_task.ps1
+```
+
+When `--github-push` is enabled through the starter script, the monitor only
+publishes runtime artifacts when a scan produces alerts.
+
 ## Universe Handling
 
 The scanner supports:
@@ -122,6 +136,15 @@ Key files:
 
 - `current_state.json`
 - `latest_alerts.json`
+
+### Runtime publication target
+
+Published into the `realtime-scanner-headless` branch through a dedicated
+publish worktree:
+
+- `realtime_dashboard/artifacts/scanner_state/`
+- `realtime_dashboard/artifacts/theme_state/`
+- `logs/`
 
 ### Initialization reports
 
