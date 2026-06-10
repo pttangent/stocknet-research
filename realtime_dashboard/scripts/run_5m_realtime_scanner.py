@@ -223,13 +223,16 @@ def git_commit_state(snapshot_timestamp: Optional[datetime], scan_number: int, t
     """Auto-commit scanner state to realtimes_log branch."""
     try:
         repo_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-        # Stage state files
-        subprocess.run(
-            ["git", "add", "-A", "realtime_dashboard/artifacts/"],
-            cwd=repo_root,
-            capture_output=True,
-            check=False,
-        )
+        # Stage state files (force to bypass gitignore)
+        for subdir in ["scanner_state", "theme_state"]:
+            path = os.path.join(repo_root, "realtime_dashboard", "artifacts", subdir)
+            if os.path.isdir(path):
+                subprocess.run(
+                    ["git", "add", "-f", "--all", path],
+                    cwd=repo_root,
+                    capture_output=True,
+                    check=False,
+                )
         # Check if there are changes to commit
         result = subprocess.run(
             ["git", "diff", "--cached", "--quiet"],
