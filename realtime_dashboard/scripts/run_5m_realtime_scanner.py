@@ -220,18 +220,15 @@ def build_state_payload(
 
 
 def git_commit_state(snapshot_timestamp: Optional[datetime], scan_number: int, theme_count: int) -> None:
-    """Auto-commit scanner state to realtimes_log branch."""
+    """Auto-commit scanner state to realtimes_log branch.
+
+    Copies files to a temp dir before checkout to avoid git checkout overwriting local changes.
+    """
     try:
-        repo_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-        # Checkout realtimes_log branch
-        subprocess.run(
-            ["git", "checkout", "realtimes_log"],
-            cwd=repo_root,
-            capture_output=True,
-            check=False,
-        )
-        # Stage specific state files by pattern
         import glob
+        import shutil
+        repo_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+        # Collect state files and copy to temp dir before checkout
         state_files = []
         for subdir in ["scanner_state", "theme_state"]:
             path = os.path.join(repo_root, "realtime_dashboard", "artifacts", subdir)
@@ -240,13 +237,31 @@ def git_commit_state(snapshot_timestamp: Optional[datetime], scan_number: int, t
                     state_files.extend(glob.glob(os.path.join(path, ext)))
         if not state_files:
             return
+        # Save files to temp dir
+        tmp_dir = os.path.join(repo_root, ".git", "_scanner_state_tmp")
+        os.makedirs(tmp_dir, exist_ok=True)
+        for src in state_files:
+            dst = os.path.join(tmp_dir, os.path.basename(src))
+            shutil.copy2(src, dst)
+        # Checkout realtimes_log branch
+        subprocess.run(
+            ["git", "checkout", "realtimes_log"],
+            cwd=repo_root,
+            capture_output=True,
+            check=False,
+        )
+        # Restore files from temp dir
+        for src in state_files:
+            dst = os.path.join(tmp_dir, os.path.basename(src))
+            if os.path.exists(dst):
+                shutil.copy2(dst, src)
+        # Stage and commit
         subprocess.run(
             ["git", "add", "-f"] + state_files,
             cwd=repo_root,
             capture_output=True,
             check=False,
         )
-        # Check if there are changes to commit
         result = subprocess.run(
             ["git", "diff", "--cached", "--quiet"],
             cwd=repo_root,
@@ -255,7 +270,6 @@ def git_commit_state(snapshot_timestamp: Optional[datetime], scan_number: int, t
         )
         if result.returncode == 0:
             return  # No changes
-        # Commit
         ts_str = snapshot_timestamp.strftime("%Y%m%d_%H%M") if snapshot_timestamp else "unknown"
         msg = f"Scan {scan_number} | snapshot {ts_str} | {theme_count} themes"
         subprocess.run(
@@ -265,7 +279,6 @@ def git_commit_state(snapshot_timestamp: Optional[datetime], scan_number: int, t
             capture_output=True,
             check=False,
         )
-        # Push to realtimes_log
         subprocess.run(
             ["git", "push", "origin", "realtimes_log"],
             cwd=repo_root,
