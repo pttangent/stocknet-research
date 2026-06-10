@@ -1,0 +1,26 @@
+{
+  "version": 1,
+  "stage": "train_tgnn_snapshot",
+  "run_id": "train_tgnn_snapshot_20260607_081111",
+  "started_at": "2026-06-07T08:11:11Z",
+  "output_dir": "D:\\DEV\\stocknetwork\\StockNet\\artifacts\\tgnn_snapshot_final",
+  "label": "",
+  "notes": "",
+  "parameters": {
+    "dataset_dir": "artifacts/graph_snapshots_final",
+    "output": "artifacts/tgnn_snapshot_final",
+    "sequence_length": 8,
+    "hidden_dim": 32,
+    "epochs": 10,
+    "learning_rate": 0.001,
+    "train_fraction": 0.6,
+    "validation_fraction": 0.2,
+    "device": "cuda",
+    "run_id": "",
+    "run_label": "",
+    "run_notes": ""
+  },
+  "extra": {
+    "runtime_python": "C:\\Python314\\python.exe"
+  }
+}

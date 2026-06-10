@@ -1,0 +1,24 @@
+{
+  "version": 1,
+  "stage": "train_community_tgnn",
+  "run_id": "train_community_tgnn_20260607_082602",
+  "started_at": "2026-06-07T08:26:02Z",
+  "output_dir": "D:\\DEV\\stocknetwork\\StockNet\\artifacts\\tgnn_community_final",
+  "label": "",
+  "notes": "",
+  "parameters": {
+    "dataset_dir": "artifacts/graph_snapshots_final",
+    "output": "artifacts/tgnn_community_final",
+    "sequence_length": 8,
+    "hidden_dim": 32,
+    "num_gnn_layers": 2,
+    "temporal_model": "GConvGRU",
+    "epochs": 10,
+    "learning_rate": 0.001,
+    "device": "cuda",
+    "run_id": "",
+    "run_label": "",
+    "run_notes": ""
+  },
+  "extra": {}
+}

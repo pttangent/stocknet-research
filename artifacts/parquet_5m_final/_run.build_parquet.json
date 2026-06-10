@@ -1,0 +1,31 @@
+{
+  "version": 1,
+  "stage": "build_parquet",
+  "run_id": "build_parquet_20260607_101143",
+  "started_at": "2026-06-07T10:11:43Z",
+  "output_dir": "D:\\DEV\\stocknetwork\\StockNet\\artifacts\\parquet_5m_final",
+  "label": "build_5m_from_screen_20260606",
+  "notes": "",
+  "parameters": {
+    "input": "D:\\DEV\\stocknetwork\\P123_Screen_0_20260606.csv",
+    "output": "D:\\DEV\\stocknetwork\\StockNet\\artifacts\\parquet_5m_final",
+    "interval": "5m",
+    "lookback_days": 60,
+    "sleep_seconds": 0.35,
+    "timeout_seconds": 20.0,
+    "retries": 3,
+    "limit": 0,
+    "symbols": [],
+    "extra_symbols": [
+      "SPY",
+      "QQQ",
+      "IWM",
+      "DIA"
+    ],
+    "workers": 8,
+    "run_id": "",
+    "run_label": "build_5m_from_screen_20260606",
+    "run_notes": ""
+  },
+  "extra": {}
+}

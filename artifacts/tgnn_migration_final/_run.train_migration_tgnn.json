@@ -1,0 +1,24 @@
+{
+  "version": 1,
+  "stage": "train_migration_tgnn",
+  "run_id": "train_migration_tgnn_20260607_083241",
+  "started_at": "2026-06-07T08:32:41Z",
+  "output_dir": "D:\\DEV\\stocknetwork\\StockNet\\artifacts\\tgnn_migration_final",
+  "label": "",
+  "notes": "",
+  "parameters": {
+    "dataset_dir": "artifacts/graph_snapshots_final",
+    "output": "artifacts/tgnn_migration_final",
+    "sequence_length": 8,
+    "hidden_dim": 32,
+    "num_gnn_layers": 2,
+    "temporal_model": "GConvGRU",
+    "epochs": 10,
+    "learning_rate": 0.001,
+    "device": "cuda",
+    "run_id": "",
+    "run_label": "",
+    "run_notes": ""
+  },
+  "extra": {}
+}
