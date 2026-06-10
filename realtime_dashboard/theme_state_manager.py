@@ -616,6 +616,111 @@ class ThemeStateManager:
                 logger.warning("Failed to read existing membership: %s; overwriting.", exc)
         df.to_parquet(self.membership_path, index=False)
 
+    def _assign_matches(
+        self,
+        timestamp: datetime,
+        frequency: str,
+        communities_df: pd.DataFrame,
+        snapshot_timestamp: Optional[datetime] = None,
+        observed_at: Optional[datetime] = None,
+    ) -> Tuple[pd.DataFrame, List[ThemeMatchResult]]:
+        """Attach theme identity fields without persisting lifecycle updates yet."""
+        if communities_df.empty:
+            return communities_df.copy(), []
+
+        out = communities_df.copy()
+        snap_ts = snapshot_timestamp or timestamp
+        obs_at = observed_at or timestamp
+
+        for col in [
+            "theme_path_id",
+            "event_type",
+            "match_score",
+            "matched_previous_frequency",
+            "matched_previous_community_id",
+            "snapshot_timestamp",
+            "observed_at",
+        ]:
+            if col not in out.columns:
+                out[col] = None
+
+        out["snapshot_timestamp"] = snap_ts.isoformat()
+        out["observed_at"] = obs_at.isoformat()
+
+        matches: List[ThemeMatchResult] = []
+        for idx, row in out.iterrows():
+            match = self.match_community(timestamp, frequency, row)
+            matches.append(match)
+            out.at[idx, "theme_path_id"] = match.theme_path_id
+            out.at[idx, "event_type"] = match.event_type
+            out.at[idx, "match_score"] = match.match_score
+            out.at[idx, "matched_previous_frequency"] = match.matched_previous_frequency
+            out.at[idx, "matched_previous_community_id"] = match.matched_previous_community_id
+
+        return out, matches
+
+    def assign_only(
+        self,
+        timestamp: datetime,
+        frequency: str,
+        communities_df: pd.DataFrame,
+        memberships_df: Optional[pd.DataFrame] = None,
+        snapshot_timestamp: Optional[datetime] = None,
+        observed_at: Optional[datetime] = None,
+    ) -> pd.DataFrame:
+        """Assign persistent theme IDs before lifecycle-aware scoring runs."""
+        out, _ = self._assign_matches(
+            timestamp=timestamp,
+            frequency=frequency,
+            communities_df=communities_df,
+            snapshot_timestamp=snapshot_timestamp,
+            observed_at=observed_at,
+        )
+        return out
+
+    def update_scored_communities(
+        self,
+        timestamp: datetime,
+        frequency: str,
+        communities_df: pd.DataFrame,
+        memberships_df: Optional[pd.DataFrame] = None,
+        snapshot_timestamp: Optional[datetime] = None,
+        observed_at: Optional[datetime] = None,
+        mark_inactive: bool = False,
+    ) -> pd.DataFrame:
+        """Persist lifecycle updates for communities that already carry theme identity fields."""
+        out, matches = self._assign_matches(
+            timestamp=timestamp,
+            frequency=frequency,
+            communities_df=communities_df,
+            snapshot_timestamp=snapshot_timestamp,
+            observed_at=observed_at,
+        )
+        if out.empty:
+            return out
+
+        snap_ts = snapshot_timestamp or timestamp
+        obs_at = observed_at or timestamp
+
+        for idx, row in out.iterrows():
+            match = matches[idx]
+            self.update_path(timestamp, frequency, row, match, snapshot_timestamp=snap_ts, observed_at=obs_at)
+            self.write_event(timestamp, frequency, row, match, snapshot_timestamp=snap_ts, observed_at=obs_at)
+
+            if memberships_df is not None and not memberships_df.empty:
+                self.write_membership(
+                    timestamp,
+                    frequency,
+                    match.theme_path_id,
+                    row.get("community_id"),
+                    memberships_df,
+                )
+
+        if mark_inactive:
+            self.mark_inactive_themes(obs_at, snapshot_timestamp=snap_ts)
+        self.save()
+        return out
+
     # ── Batch processing ────────────────────────────────────────────────────
 
     def assign_and_update(
@@ -626,6 +731,7 @@ class ThemeStateManager:
         memberships_df: Optional[pd.DataFrame] = None,
         snapshot_timestamp: Optional[datetime] = None,
         observed_at: Optional[datetime] = None,
+        mark_inactive: bool = True,
     ) -> pd.DataFrame:
         """
         For each community in the dataframe:
@@ -643,47 +749,23 @@ class ThemeStateManager:
         - snapshot_timestamp
         - observed_at
         """
-        if communities_df.empty:
-            return communities_df
-
-        out = communities_df.copy()
-        snap_ts = snapshot_timestamp or timestamp
-        obs_at = observed_at or timestamp
-
-        # Ensure columns exist
-        for col in ["theme_path_id", "event_type", "match_score",
-                    "matched_previous_frequency", "matched_previous_community_id",
-                    "snapshot_timestamp", "observed_at"]:
-            if col not in out.columns:
-                out[col] = None
-
-        out["snapshot_timestamp"] = snap_ts.isoformat()
-        out["observed_at"] = obs_at.isoformat()
-
-        for idx, row in out.iterrows():
-            match = self.match_community(timestamp, frequency, row)
-            self.update_path(timestamp, frequency, row, match, snapshot_timestamp=snap_ts, observed_at=obs_at)
-            self.write_event(timestamp, frequency, row, match, snapshot_timestamp=snap_ts, observed_at=obs_at)
-
-            if memberships_df is not None and not memberships_df.empty:
-                comm_id = row.get("community_id")
-                self.write_membership(
-                    timestamp, frequency,
-                    match.theme_path_id, comm_id,
-                    memberships_df,
-                )
-
-            out.at[idx, "theme_path_id"] = match.theme_path_id
-            out.at[idx, "event_type"] = match.event_type
-            out.at[idx, "match_score"] = match.match_score
-            out.at[idx, "matched_previous_frequency"] = match.matched_previous_frequency
-            out.at[idx, "matched_previous_community_id"] = match.matched_previous_community_id
-
-        # Update inactive themes using snapshot-based gap counting
-        self.mark_inactive_themes(obs_at, snapshot_timestamp=snap_ts)
-        self.save()
-
-        return out
+        assigned = self.assign_only(
+            timestamp=timestamp,
+            frequency=frequency,
+            communities_df=communities_df,
+            memberships_df=memberships_df,
+            snapshot_timestamp=snapshot_timestamp,
+            observed_at=observed_at,
+        )
+        return self.update_scored_communities(
+            timestamp=timestamp,
+            frequency=frequency,
+            communities_df=assigned,
+            memberships_df=memberships_df,
+            snapshot_timestamp=snapshot_timestamp,
+            observed_at=observed_at,
+            mark_inactive=mark_inactive,
+        )
 
     # ── Warm-start from historical parquet ──────────────────────────────────
 
@@ -749,7 +831,7 @@ class ThemeStateManager:
         bars_df["timestamp"] = pd.to_datetime(bars_df["timestamp"], utc=True)
 
         # Filter to lookback window
-        cutoff = datetime.now(UTC) - timedelta(days=lookback_days)
+        cutoff = bars_df["timestamp"].max() - timedelta(days=lookback_days)
         bars_df = bars_df[bars_df["timestamp"] >= cutoff]
 
         if bars_df.empty:
@@ -784,12 +866,17 @@ class ThemeStateManager:
             if communities_df.empty:
                 continue
 
+            ts_dt = pd.Timestamp(ts).to_pydatetime()
             communities_df["level"] = 0
             communities_df["status"] = ""
+            communities_df = self.assign_only(
+                ts_dt,
+                frequency,
+                communities_df,
+                memberships_df,
+            )
             communities_df = scorer.score(communities_df, memberships_df, edges_df)
-
-            ts_dt = pd.Timestamp(ts).to_pydatetime()
-            _ = self.assign_and_update(ts_dt, frequency, communities_df, memberships_df)
+            _ = self.update_scored_communities(ts_dt, frequency, communities_df, memberships_df)
 
         theme_count_after = len(self.paths)
         created = theme_count_after - theme_count_before

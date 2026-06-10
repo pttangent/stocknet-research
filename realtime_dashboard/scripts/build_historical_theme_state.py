@@ -143,6 +143,15 @@ def load_all_bars(parquet_dir: str, symbols_filter: list[str] | None = None) -> 
     return combined.sort_values(["symbol", "timestamp"]).reset_index(drop=True)
 
 
+def filter_bars_for_lookback(bars_df: pd.DataFrame, lookback_days: int) -> pd.DataFrame:
+    """Anchor lookback to the newest timestamp in the dataset, not wall clock now."""
+    if bars_df.empty:
+        return bars_df
+    max_timestamp = pd.to_datetime(bars_df["timestamp"], utc=True).max()
+    cutoff = max_timestamp - pd.Timedelta(days=lookback_days)
+    return bars_df[pd.to_datetime(bars_df["timestamp"], utc=True) >= cutoff].copy()
+
+
 def build_theme_state(
     bars_df: pd.DataFrame,
     frequency: str,
@@ -184,12 +193,17 @@ def build_theme_state(
         if communities_df.empty:
             continue
 
+        ts_dt = pd.Timestamp(ts).to_pydatetime()
         communities_df["level"] = 0
         communities_df["status"] = ""
+        communities_df = theme_state_manager.assign_only(
+            timestamp=ts_dt,
+            frequency=frequency,
+            communities_df=communities_df,
+            memberships_df=memberships_df,
+        )
         communities_df = scorer.score(communities_df, memberships_df, edges_df)
-
-        ts_dt = pd.Timestamp(ts).to_pydatetime()
-        communities_df = theme_state_manager.assign_and_update(
+        communities_df = theme_state_manager.update_scored_communities(
             timestamp=ts_dt,
             frequency=frequency,
             communities_df=communities_df,
@@ -267,9 +281,8 @@ def main() -> None:
     )
 
     # Filter to lookback window
-    cutoff = datetime.now(timezone.utc) - timedelta(days=args.lookback_days)
     before_filter = len(bars_df)
-    bars_df = bars_df[bars_df["timestamp"] >= cutoff]
+    bars_df = filter_bars_for_lookback(bars_df, lookback_days=args.lookback_days)
     logger.info(
         "Filtered to lookback=%dd: %d -> %d rows",
         args.lookback_days,

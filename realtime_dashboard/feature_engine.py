@@ -5,6 +5,7 @@ import numpy as np
 from typing import List, Dict, Optional, Tuple
 from dataclasses import dataclass
 import logging
+from zoneinfo import ZoneInfo
 
 try:
     from .config import FeatureConfig
@@ -12,6 +13,7 @@ except ImportError:
     from config import FeatureConfig
 
 logger = logging.getLogger(__name__)
+NEW_YORK_TZ = ZoneInfo("America/New_York")
 
 
 @dataclass
@@ -107,11 +109,15 @@ class RollingFeatureEngine:
         if len(group) < 1:
             return None
 
+        group = group.copy()
         latest = group.iloc[-1]
         feats = SymbolFeatures(
             symbol=symbol,
             timestamp=latest["timestamp"],
         )
+        timestamps = pd.to_datetime(group["timestamp"], utc=True)
+        session_dates = timestamps.dt.tz_convert(NEW_YORK_TZ).dt.date
+        latest_session = session_dates.iloc[-1]
 
         # Returns over different windows
         for window in self.config.windows:
@@ -141,8 +147,8 @@ class RollingFeatureEngine:
         if "vwap" in group.columns and not pd.isna(latest.get("vwap")):
             feats.intraday_vwap_distance = (latest["close"] - latest["vwap"]) / latest["vwap"] if latest["vwap"] != 0 else 0
         else:
-            # Approximate intraday VWAP from today's bars
-            today_bars = group  # Assume all bars are from same session for simplicity
+            # Approximate intraday VWAP from the current market session only.
+            today_bars = group[session_dates == latest_session]
             tpv = ((today_bars["high"] + today_bars["low"] + today_bars["close"]) / 3 * today_bars["volume"]).sum()
             tv = today_bars["volume"].sum()
             vwap = tpv / tv if tv > 0 else latest["close"]
@@ -159,9 +165,15 @@ class RollingFeatureEngine:
             prev = self._prev_close[symbol]
             if prev > 0:
                 feats.gap_from_prev_close = (latest["open"] - prev) / prev
-        elif len(group) > 1:
-            prev = group.iloc[-2]["close"]
-            if prev > 0:
+        else:
+            prev_sessions = group[session_dates < latest_session]
+            if not prev_sessions.empty:
+                prev = prev_sessions.iloc[-1]["close"]
+            elif len(group) > 1:
+                prev = group.iloc[-2]["close"]
+            else:
+                prev = None
+            if prev and prev > 0:
                 feats.gap_from_prev_close = (latest["open"] - prev) / prev
 
         return feats

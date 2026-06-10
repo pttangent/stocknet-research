@@ -53,12 +53,28 @@ def parse_args() -> argparse.Namespace:
 
 
 def resolve_scan_timestamp(bars_df: pd.DataFrame) -> datetime:
-    timestamps = pd.to_datetime(bars_df["timestamp"], utc=True)
-    counts = timestamps.value_counts()
+    if bars_df.empty or "timestamp" not in bars_df.columns:
+        return datetime.now(UTC)
+
+    df = bars_df.copy()
+    df["timestamp"] = pd.to_datetime(df["timestamp"], utc=True)
+    if "symbol" not in df.columns:
+        latest_timestamp = df["timestamp"].max()
+        return pd.Timestamp(latest_timestamp).to_pydatetime() if pd.notna(latest_timestamp) else datetime.now(UTC)
+
+    latest_by_symbol = (
+        df.sort_values(["symbol", "timestamp"])
+        .groupby("symbol", as_index=False)
+        .tail(1)
+    )
+    counts = latest_by_symbol["timestamp"].value_counts()
     if counts.empty:
         return datetime.now(UTC)
-    dominant = counts[counts == counts.max()].index.max()
-    return pd.Timestamp(dominant).to_pydatetime()
+
+    total_symbols = max(int(latest_by_symbol["symbol"].nunique()), 1)
+    valid = counts[counts >= total_symbols * 0.6]
+    chosen = valid.index.max() if not valid.empty else latest_by_symbol["timestamp"].max()
+    return pd.Timestamp(chosen).to_pydatetime()
 
 
 def dataframe_to_records(df: pd.DataFrame, limit: int = 20) -> list[dict]:
@@ -183,14 +199,23 @@ def process_frequency(
     if communities_df.empty:
         return pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), []
 
+    timestamp = resolve_scan_timestamp(bars_df)
     communities_df["level"] = 0
     communities_df["status"] = ""
+
+    if theme_state_manager is not None:
+        communities_df = theme_state_manager.assign_only(
+            timestamp=timestamp,
+            frequency=frequency,
+            communities_df=communities_df,
+            memberships_df=memberships_df,
+        )
+
     communities_df = runtime.scorer.score(communities_df, memberships_df, edges_df)
-    timestamp = resolve_scan_timestamp(bars_df)
 
     # === THEME STATE MANAGER: assign persistent theme_path_id ===
     if theme_state_manager is not None:
-        communities_df = theme_state_manager.assign_and_update(
+        communities_df = theme_state_manager.update_scored_communities(
             timestamp=timestamp,
             frequency=frequency,
             communities_df=communities_df,
@@ -305,6 +330,8 @@ def main() -> None:
         intraday_logger.log_bars(bars_df)
 
         cached_1m = feed.get_all_cached()
+        cached_5m = pd.DataFrame()
+        cached_15m = pd.DataFrame()
 
         # === 1m processing (optional) ===
         latest_1m_snapshots = pd.DataFrame()
@@ -330,7 +357,7 @@ def main() -> None:
         latest_5m_members = pd.DataFrame()
         latest_5m_edges = pd.DataFrame()
         alerts_5m = []
-        if not cached_1m.empty:
+        if (args.enable_5m or args.skip_1m) and not cached_1m.empty:
             cached_5m = aggregate_intraday(cached_1m, "5min")
             latest_5m_snapshots, latest_5m_members, latest_5m_edges, alerts_5m = process_frequency(
                 runtime_5m,
@@ -363,6 +390,21 @@ def main() -> None:
                 intraday_logger.log_edges(latest_15m_edges, resolve_scan_timestamp(cached_15m))
             if alerts_15m:
                 intraday_logger.log_alerts(pd.DataFrame([alert.to_dict() for alert in alerts_15m]))
+
+        if theme_state_manager is not None:
+            snapshot_candidates = []
+            if not cached_1m.empty:
+                snapshot_candidates.append(resolve_scan_timestamp(cached_1m))
+            if (args.enable_5m or args.skip_1m) and not cached_5m.empty:
+                snapshot_candidates.append(resolve_scan_timestamp(cached_5m))
+            if args.enable_15m and not cached_15m.empty:
+                snapshot_candidates.append(resolve_scan_timestamp(cached_15m))
+            if snapshot_candidates:
+                theme_state_manager.mark_inactive_themes(
+                    current_timestamp=datetime.now(UTC),
+                    snapshot_timestamp=max(snapshot_candidates),
+                )
+                theme_state_manager.save()
 
         payload = build_state_payload(
             universe=args.universe,

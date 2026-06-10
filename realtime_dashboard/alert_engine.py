@@ -164,6 +164,7 @@ class AlertEngine:
             state["last_seen"] = timestamp
             state["windows_seen"] += 1
             state["consecutive_windows"] += 1
+            state["member_stability"] = row.get("member_stability", 0.0) or 0.0
             state["history"].append(row.to_dict())
 
             # Determine level
@@ -276,7 +277,7 @@ class AlertEngine:
         # Level 2: 1m Persistent
         if frequency == "1m":
             if (state["consecutive_windows"] >= self.config.l2_min_consecutive_windows
-                and state.get("member_stability", 1.0) >= self.config.l2_min_member_stability
+                and state.get("member_stability", 0.0) >= self.config.l2_min_member_stability
                 and coherence >= self.config.l2_min_coherence):
                 return AlertLevel.PERSISTENT
 
