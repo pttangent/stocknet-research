@@ -230,16 +230,22 @@ def git_commit_state(snapshot_timestamp: Optional[datetime], scan_number: int, t
             capture_output=True,
             check=False,
         )
-        # Stage state files (force to bypass gitignore)
+        # Stage specific state files by pattern
+        import glob
+        state_files = []
         for subdir in ["scanner_state", "theme_state"]:
             path = os.path.join(repo_root, "realtime_dashboard", "artifacts", subdir)
             if os.path.isdir(path):
-                subprocess.run(
-                    ["git", "add", "-f", "--all", path],
-                    cwd=repo_root,
-                    capture_output=True,
-                    check=False,
-                )
+                for ext in ["*.json", "*.csv"]:
+                    state_files.extend(glob.glob(os.path.join(path, ext)))
+        if not state_files:
+            return
+        subprocess.run(
+            ["git", "add", "-f"] + state_files,
+            cwd=repo_root,
+            capture_output=True,
+            check=False,
+        )
         # Check if there are changes to commit
         result = subprocess.run(
             ["git", "diff", "--cached", "--quiet"],
