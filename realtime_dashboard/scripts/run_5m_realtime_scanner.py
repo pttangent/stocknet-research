@@ -21,6 +21,7 @@ from datetime import datetime, UTC, timedelta
 from typing import Optional
 
 import pandas as pd
+import subprocess
 
 ROOT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if ROOT_DIR not in sys.path:
@@ -216,6 +217,57 @@ def build_state_payload(
         }
 
     return payload
+
+
+def git_commit_state(snapshot_timestamp: Optional[datetime], scan_number: int, theme_count: int) -> None:
+    """Auto-commit scanner state to realtimes_log branch."""
+    try:
+        repo_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+        # Checkout realtimes_log branch
+        subprocess.run(
+            ["git", "checkout", "realtimes_log"],
+            cwd=repo_root,
+            capture_output=True,
+            check=False,
+        )
+        # Stage state files (force to bypass gitignore)
+        for subdir in ["scanner_state", "theme_state"]:
+            path = os.path.join(repo_root, "realtime_dashboard", "artifacts", subdir)
+            if os.path.isdir(path):
+                subprocess.run(
+                    ["git", "add", "-f", "--all", path],
+                    cwd=repo_root,
+                    capture_output=True,
+                    check=False,
+                )
+        # Check if there are changes to commit
+        result = subprocess.run(
+            ["git", "diff", "--cached", "--quiet"],
+            cwd=repo_root,
+            capture_output=True,
+            check=False,
+        )
+        if result.returncode == 0:
+            return  # No changes
+        # Commit
+        ts_str = snapshot_timestamp.strftime("%Y%m%d_%H%M") if snapshot_timestamp else "unknown"
+        msg = f"Scan {scan_number} | snapshot {ts_str} | {theme_count} themes"
+        subprocess.run(
+            ["git", "commit", "-m", msg,
+             "-m", "Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>"],
+            cwd=repo_root,
+            capture_output=True,
+            check=False,
+        )
+        # Push to realtimes_log
+        subprocess.run(
+            ["git", "push", "origin", "realtimes_log"],
+            cwd=repo_root,
+            capture_output=True,
+            check=False,
+        )
+    except Exception as exc:
+        logger.warning("Git auto-commit failed: %s", exc)
 
 
 def dataframe_to_records(df: pd.DataFrame, limit: int = 20) -> list[dict]:
@@ -488,6 +540,10 @@ def main() -> None:
         if args.enable_15m:
             alerts_payload["alerts_15m"] = [alert.to_dict() for alert in alerts_15m]
         state_writer.write_json("latest_alerts.json", alerts_payload)
+
+        # Auto-commit state to realtimes_log branch
+        theme_count = payload.get("theme_state", {}).get("total_paths", 0)
+        git_commit_state(snapshot_ts, scan_number, theme_count)
 
         output_summary = {
             "scan_number": scan_number,
