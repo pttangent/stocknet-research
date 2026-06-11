@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-06-11T14:01:07.525500+00:00",
+  "generated_at": "2026-06-11T14:02:22.507825+00:00",
   "path_count": 4932,
   "active_count": 13,
   "inactive_count": 0,
@@ -799,9 +799,9 @@
       "theme_family": "unknown",
       "state": "active",
       "first_seen": "2026-06-09T20:00:00+00:00",
-      "last_seen": "2026-06-11T14:01:01+00:00",
-      "last_frequency": "1m",
-      "last_community_id": "C006",
+      "last_seen": "2026-06-11T14:05:00+00:00",
+      "last_frequency": "5m",
+      "last_community_id": "C002",
       "core_members": [
         "ABNB",
         "DV",
@@ -825,31 +825,29 @@
         "ALTO"
       ],
       "last_members": [
-        "AGCO",
-        "ALTO",
-        "AIOT",
-        "AGRO",
-        "AMCX"
+        "AMCX",
+        "ABNB",
+        "ACHV",
+        "AGRO"
       ],
       "top_members": [
-        "AGCO",
-        "AGRO",
         "AMCX",
-        "ALTO",
-        "AIOT"
+        "ACHV",
+        "AGRO",
+        "ABNB"
       ],
-      "peak_radar_score": 0.6132240259231867,
-      "last_radar_score": 0.4210386256807984,
-      "age_events": 8,
+      "peak_radar_score": 0.6198424488330788,
+      "last_radar_score": 0.6198424488330788,
+      "age_events": 10,
       "inactive_events": 2,
       "scale_states": {
         "5m": {
-          "last_seen": "2026-06-11T14:00:00+00:00",
-          "last_community_id": "C003"
+          "last_seen": "2026-06-11T14:05:00+00:00",
+          "last_community_id": "C002"
         },
         "1m": {
-          "last_seen": "2026-06-11T14:01:01+00:00",
-          "last_community_id": "C006"
+          "last_seen": "2026-06-11T14:02:16+00:00",
+          "last_community_id": "C005"
         }
       },
       "core_member_history": [
@@ -904,20 +902,32 @@
           "AMCX",
           "ALTO",
           "AIOT"
+        ],
+        [
+          "AMCX",
+          "AHRT",
+          "AGCO",
+          "AGRO"
+        ],
+        [
+          "AMCX",
+          "ACHV",
+          "AGRO",
+          "ABNB"
         ]
       ],
       "first_seen_snapshot": "2026-06-09T20:00:00+00:00",
-      "last_seen_snapshot": "2026-06-11T14:01:01+00:00",
+      "last_seen_snapshot": "2026-06-11T14:05:00+00:00",
       "first_observed_at": "2026-06-10T03:13:59.533292+00:00",
-      "last_observed_at": "2026-06-11T14:01:01+00:00",
+      "last_observed_at": "2026-06-11T14:05:00+00:00",
       "ended_at_snapshot": "",
       "state_changed_at": "2026-06-11T13:55:00+00:00",
-      "active_snapshot_count": 8,
-      "active_bar_count": 8,
-      "active_minutes": 40,
-      "calendar_duration_minutes": 2521,
+      "active_snapshot_count": 10,
+      "active_bar_count": 10,
+      "active_minutes": 50,
+      "calendar_duration_minutes": 2525,
       "inactive_snapshot_count": 2,
-      "peak_radar_timestamp": "2026-06-10T13:30:00+00:00"
+      "peak_radar_timestamp": "2026-06-11T14:05:00+00:00"
     },
     {
       "theme_path_id": "T_20260609_be3406f5",
@@ -100439,7 +100449,7 @@
       "first_seen": "2026-06-10T17:25:04+00:00",
       "last_seen": "2026-06-11T14:05:00+00:00",
       "last_frequency": "5m",
-      "last_community_id": "C001",
+      "last_community_id": "C003",
       "core_members": [
         "AARD",
         "ALOT",
@@ -100452,23 +100462,24 @@
         "ALGN",
         "ALG",
         "AMPH",
-        "AESI"
+        "AESI",
+        "AKTS"
       ],
       "last_members": [
-        "ALGN",
+        "AKTS",
         "ACRS",
         "AMPH",
         "AIOT"
       ],
       "top_members": [
         "ACRS",
-        "AMPH",
         "AIOT",
-        "ALGN"
+        "AMPH",
+        "AKTS"
       ],
       "peak_radar_score": 0.6514536957074153,
-      "last_radar_score": 0.5,
-      "age_events": 7,
+      "last_radar_score": 0.5185587590090686,
+      "age_events": 8,
       "inactive_events": 2,
       "scale_states": {
         "1m": {
@@ -100477,7 +100488,7 @@
         },
         "5m": {
           "last_seen": "2026-06-11T14:05:00+00:00",
-          "last_community_id": "C001"
+          "last_community_id": "C003"
         }
       },
       "core_member_history": [
@@ -100525,6 +100536,12 @@
           "AMPH",
           "AIOT",
           "ALGN"
+        ],
+        [
+          "ACRS",
+          "AIOT",
+          "AMPH",
+          "AKTS"
         ]
       ],
       "first_seen_snapshot": "2026-06-10T17:25:04+00:00",
@@ -100533,9 +100550,9 @@
       "last_observed_at": "2026-06-11T14:05:00+00:00",
       "ended_at_snapshot": "",
       "state_changed_at": "2026-06-11T14:00:00+00:00",
-      "active_snapshot_count": 7,
-      "active_bar_count": 7,
-      "active_minutes": 35,
+      "active_snapshot_count": 8,
+      "active_bar_count": 8,
+      "active_minutes": 40,
       "calendar_duration_minutes": 1239,
       "inactive_snapshot_count": 2,
       "peak_radar_timestamp": "2026-06-11T14:00:00+00:00"
@@ -100867,9 +100884,9 @@
       "theme_family": "unknown",
       "state": "active",
       "first_seen": "2026-06-10T17:25:04+00:00",
-      "last_seen": "2026-06-11T13:59:47+00:00",
+      "last_seen": "2026-06-11T14:02:16+00:00",
       "last_frequency": "1m",
-      "last_community_id": "C003",
+      "last_community_id": "C001",
       "core_members": [
         "AGYS",
         "AEBI",
@@ -100880,28 +100897,33 @@
         "ADM",
         "ADAM",
         "ALGN",
-        "AGRO"
+        "AGRO",
+        "AIN",
+        "ABM",
+        "AAP"
       ],
       "last_members": [
-        "AGRO",
         "AMPH",
-        "ADM",
+        "AAP",
+        "ABM",
+        "AIN",
         "AIT"
       ],
       "top_members": [
+        "AIN",
         "AMPH",
-        "AIT",
-        "AGRO",
-        "ADM"
+        "ABM",
+        "AAP",
+        "AIT"
       ],
-      "peak_radar_score": 0.5456500955771616,
-      "last_radar_score": 0.4329108677357299,
-      "age_events": 4,
-      "inactive_events": 3,
+      "peak_radar_score": 0.6590605749096605,
+      "last_radar_score": 0.6590605749096605,
+      "age_events": 5,
+      "inactive_events": 2,
       "scale_states": {
         "1m": {
-          "last_seen": "2026-06-11T13:59:47+00:00",
-          "last_community_id": "C003"
+          "last_seen": "2026-06-11T14:02:16+00:00",
+          "last_community_id": "C001"
         }
       },
       "core_member_history": [
@@ -100930,20 +100952,27 @@
           "AIT",
           "AGRO",
           "ADM"
+        ],
+        [
+          "AIN",
+          "AMPH",
+          "ABM",
+          "AAP",
+          "AIT"
         ]
       ],
       "first_seen_snapshot": "2026-06-10T17:25:04+00:00",
-      "last_seen_snapshot": "2026-06-11T13:59:47+00:00",
+      "last_seen_snapshot": "2026-06-11T14:02:16+00:00",
       "first_observed_at": "2026-06-10T17:25:04+00:00",
-      "last_observed_at": "2026-06-11T13:59:47+00:00",
+      "last_observed_at": "2026-06-11T14:02:16+00:00",
       "ended_at_snapshot": "",
       "state_changed_at": "2026-06-11T13:56:06+00:00",
-      "active_snapshot_count": 4,
-      "active_bar_count": 4,
-      "active_minutes": 20,
-      "calendar_duration_minutes": 1234,
-      "inactive_snapshot_count": 3,
-      "peak_radar_timestamp": "2026-06-11T13:57:20+00:00"
+      "active_snapshot_count": 5,
+      "active_bar_count": 5,
+      "active_minutes": 25,
+      "calendar_duration_minutes": 1237,
+      "inactive_snapshot_count": 2,
+      "peak_radar_timestamp": "2026-06-11T14:02:16+00:00"
     },
     {
       "theme_path_id": "T_20260610_734fbdcd",
@@ -451956,36 +451985,37 @@
       "theme_family": "unknown",
       "state": "active",
       "first_seen": "2026-06-11T13:56:06+00:00",
-      "last_seen": "2026-06-11T13:59:47+00:00",
+      "last_seen": "2026-06-11T14:02:16+00:00",
       "last_frequency": "1m",
-      "last_community_id": "C002",
+      "last_community_id": "C004",
       "core_members": [
         "AM",
         "ALRS",
         "AIV",
         "AGYS",
-        "AD"
+        "AD",
+        "AEBI"
       ],
       "last_members": [
-        "AIV",
         "AD",
-        "AM",
-        "AGYS"
+        "AIV",
+        "AEBI",
+        "AM"
       ],
       "top_members": [
+        "AEBI",
         "AM",
         "AD",
-        "AIV",
-        "AGYS"
+        "AIV"
       ],
       "peak_radar_score": 0.5542466544424453,
-      "last_radar_score": 0.5542466544424453,
-      "age_events": 2,
-      "inactive_events": 3,
+      "last_radar_score": 0.3551252013178026,
+      "age_events": 3,
+      "inactive_events": 2,
       "scale_states": {
         "1m": {
-          "last_seen": "2026-06-11T13:59:47+00:00",
-          "last_community_id": "C002"
+          "last_seen": "2026-06-11T14:02:16+00:00",
+          "last_community_id": "C004"
         }
       },
       "core_member_history": [
@@ -452000,19 +452030,25 @@
           "AD",
           "AIV",
           "AGYS"
+        ],
+        [
+          "AEBI",
+          "AM",
+          "AD",
+          "AIV"
         ]
       ],
       "first_seen_snapshot": "2026-06-11T13:56:06+00:00",
-      "last_seen_snapshot": "2026-06-11T13:59:47+00:00",
+      "last_seen_snapshot": "2026-06-11T14:02:16+00:00",
       "first_observed_at": "2026-06-11T13:56:06+00:00",
-      "last_observed_at": "2026-06-11T13:59:47+00:00",
+      "last_observed_at": "2026-06-11T14:02:16+00:00",
       "ended_at_snapshot": "",
       "state_changed_at": "",
-      "active_snapshot_count": 2,
-      "active_bar_count": 2,
-      "active_minutes": 10,
-      "calendar_duration_minutes": 3,
-      "inactive_snapshot_count": 3,
+      "active_snapshot_count": 3,
+      "active_bar_count": 3,
+      "active_minutes": 15,
+      "calendar_duration_minutes": 6,
+      "inactive_snapshot_count": 2,
       "peak_radar_timestamp": "2026-06-11T13:59:47+00:00"
     },
     {
@@ -452099,8 +452135,8 @@
       "theme_family": "unknown",
       "state": "active",
       "first_seen": "2026-06-11T13:57:20+00:00",
-      "last_seen": "2026-06-11T14:01:01+00:00",
-      "last_frequency": "1m",
+      "last_seen": "2026-06-11T14:05:00+00:00",
+      "last_frequency": "5m",
       "last_community_id": "C001",
       "core_members": [
         "ADUR",
@@ -452109,27 +452145,34 @@
         "ACA",
         "AGX",
         "AAL",
-        "ABG"
+        "ABG",
+        "AMG",
+        "AGEN",
+        "AMPL"
       ],
       "last_members": [
-        "ADUR",
         "ABG",
-        "AAL",
-        "ACA"
+        "AMPL",
+        "AMG",
+        "AGEN"
       ],
       "top_members": [
-        "AAL",
         "ABG",
-        "ADUR",
-        "ACA"
+        "AMG",
+        "AGEN",
+        "AMPL"
       ],
       "peak_radar_score": 0.5225475869390973,
-      "last_radar_score": 0.5225475869390973,
-      "age_events": 3,
+      "last_radar_score": 0.36281922211540957,
+      "age_events": 5,
       "inactive_events": 2,
       "scale_states": {
         "1m": {
-          "last_seen": "2026-06-11T14:01:01+00:00",
+          "last_seen": "2026-06-11T14:02:16+00:00",
+          "last_community_id": "C003"
+        },
+        "5m": {
+          "last_seen": "2026-06-11T14:05:00+00:00",
           "last_community_id": "C001"
         }
       },
@@ -452151,18 +452194,31 @@
           "ABG",
           "ADUR",
           "ACA"
+        ],
+        [
+          "ABG",
+          "ADUR",
+          "AGX",
+          "AMG",
+          "ACA"
+        ],
+        [
+          "ABG",
+          "AMG",
+          "AGEN",
+          "AMPL"
         ]
       ],
       "first_seen_snapshot": "2026-06-11T13:57:20+00:00",
-      "last_seen_snapshot": "2026-06-11T14:01:01+00:00",
+      "last_seen_snapshot": "2026-06-11T14:05:00+00:00",
       "first_observed_at": "2026-06-11T13:57:20+00:00",
-      "last_observed_at": "2026-06-11T14:01:01+00:00",
+      "last_observed_at": "2026-06-11T14:05:00+00:00",
       "ended_at_snapshot": "",
       "state_changed_at": "",
-      "active_snapshot_count": 3,
-      "active_bar_count": 3,
-      "active_minutes": 15,
-      "calendar_duration_minutes": 3,
+      "active_snapshot_count": 5,
+      "active_bar_count": 5,
+      "active_minutes": 25,
+      "calendar_duration_minutes": 7,
       "inactive_snapshot_count": 2,
       "peak_radar_timestamp": "2026-06-11T14:01:01+00:00"
     },
@@ -452293,7 +452349,7 @@
       "theme_family": "unknown",
       "state": "active",
       "first_seen": "2026-06-11T13:59:47+00:00",
-      "last_seen": "2026-06-11T14:01:01+00:00",
+      "last_seen": "2026-06-11T14:02:16+00:00",
       "last_frequency": "1m",
       "last_community_id": "C002",
       "core_members": [
@@ -452302,27 +452358,29 @@
         "AAT",
         "ACRS",
         "AMG",
-        "AGIO"
+        "AGIO",
+        "ADUS",
+        "AEIS"
       ],
       "last_members": [
-        "ACRS",
-        "AGIO",
+        "AEIS",
         "ACHV",
-        "AAT"
+        "AAT",
+        "ADUS"
       ],
       "top_members": [
-        "AGIO",
+        "ADUS",
         "AAT",
-        "ACRS",
+        "AEIS",
         "ACHV"
       ],
       "peak_radar_score": 0.603226720886959,
-      "last_radar_score": 0.603226720886959,
-      "age_events": 2,
+      "last_radar_score": 0.5992788658131594,
+      "age_events": 3,
       "inactive_events": 2,
       "scale_states": {
         "1m": {
-          "last_seen": "2026-06-11T14:01:01+00:00",
+          "last_seen": "2026-06-11T14:02:16+00:00",
           "last_community_id": "C002"
         }
       },
@@ -452339,18 +452397,24 @@
           "AAT",
           "ACRS",
           "ACHV"
+        ],
+        [
+          "ADUS",
+          "AAT",
+          "AEIS",
+          "ACHV"
         ]
       ],
       "first_seen_snapshot": "2026-06-11T13:59:47+00:00",
-      "last_seen_snapshot": "2026-06-11T14:01:01+00:00",
+      "last_seen_snapshot": "2026-06-11T14:02:16+00:00",
       "first_observed_at": "2026-06-11T13:59:47+00:00",
-      "last_observed_at": "2026-06-11T14:01:01+00:00",
+      "last_observed_at": "2026-06-11T14:02:16+00:00",
       "ended_at_snapshot": "",
       "state_changed_at": "",
-      "active_snapshot_count": 2,
-      "active_bar_count": 2,
-      "active_minutes": 10,
-      "calendar_duration_minutes": 1,
+      "active_snapshot_count": 3,
+      "active_bar_count": 3,
+      "active_minutes": 15,
+      "calendar_duration_minutes": 2,
       "inactive_snapshot_count": 2,
       "peak_radar_timestamp": "2026-06-11T14:01:01+00:00"
     },
