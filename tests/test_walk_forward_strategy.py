@@ -3,6 +3,7 @@ from __future__ import annotations
 import pandas as pd
 
 from stocknet_alpha.backtest.walk_forward_strategy import (
+    build_strategy_accounting,
     build_walk_forward_strategy_report,
     materialize_walk_forward_strategy,
     summarize_walk_forward_strategy_splits,
@@ -125,3 +126,36 @@ def test_build_walk_forward_strategy_report_mentions_split_and_weighted_summary(
     assert "Trade-weighted test avg net return" in report
     assert "wf_0001" in report
     assert "0.000500" in report
+
+
+def test_build_strategy_accounting_summarizes_daily_pnl_and_drawdown():
+    strategy_trades = pd.DataFrame(
+        [
+            {
+                "symbol": "AAA",
+                "entry_time": pd.Timestamp("2026-01-03 14:35:00+00:00"),
+                "exit_time": pd.Timestamp("2026-01-03 14:50:00+00:00"),
+                "net_return": 0.0200,
+            },
+            {
+                "symbol": "BBB",
+                "entry_time": pd.Timestamp("2026-01-03 14:40:00+00:00"),
+                "exit_time": pd.Timestamp("2026-01-03 14:55:00+00:00"),
+                "net_return": -0.0100,
+            },
+            {
+                "symbol": "AAA",
+                "entry_time": pd.Timestamp("2026-01-04 14:35:00+00:00"),
+                "exit_time": pd.Timestamp("2026-01-04 14:45:00+00:00"),
+                "net_return": -0.0300,
+            },
+        ]
+    )
+
+    daily_pnl, metrics = build_strategy_accounting(strategy_trades)
+
+    assert list(daily_pnl["trade_date"]) == ["2026-01-03", "2026-01-04"]
+    assert round(float(daily_pnl.iloc[0]["daily_pnl"]), 6) == 0.01
+    assert round(float(metrics["max_drawdown"]), 6) == -0.03
+    assert int(metrics["max_concurrent_positions"]) == 2
+    assert round(float(metrics["symbol_concentration"]), 6) == round(2 / 3, 6)

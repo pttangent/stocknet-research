@@ -252,6 +252,18 @@ def test_build_split_adjustment_factors_computes_backward_price_factor():
     assert multipliers["2026-02-05"] == 6.0
 
 
+def test_build_split_adjustment_factors_accepts_split_date_column():
+    splits = pd.DataFrame(
+        [
+            {"symbol": "AAA", "split_date": "2026-02-03", "from": 1, "to": 2},
+        ]
+    )
+
+    factors = build_split_adjustment_factors(splits, ["2026-02-02", "2026-02-03"])
+
+    assert list(factors["trade_date"]) == ["2026-02-02", "2026-02-03"]
+
+
 def test_register_market_data_views_exposes_features_and_labels(tmp_path: Path):
     paths = AlphaPaths(repo_root=tmp_path)
 

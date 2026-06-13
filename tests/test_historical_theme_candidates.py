@@ -96,6 +96,10 @@ def test_build_theme_candidates_from_market_data_finds_persistent_cluster():
     assert bool(candidates["confirmed_by_15m_graph"].any())
     confirmed = candidates.loc[candidates["confirmed_by_15m_graph"]].iloc[-1]
     assert confirmed["confirmation_source"] == "15m_graph"
+    assert "price_theme_score" in candidates.columns
+    assert "flow_theme_score" in candidates.columns
+    assert "confirmed_by_flow" in candidates.columns
+    assert float(candidates["flow_theme_score"].iloc[-1]) > 0.0
 
 
 def test_build_theme_candidates_can_use_overlap_small_confirmation():
@@ -173,3 +177,70 @@ def test_build_theme_candidates_can_use_overlap_small_confirmation():
     assert not bool(candidates.iloc[-1]["confirmed_by_15m_graph"])
     assert candidates.iloc[-1]["confirmation_source"] == "age_3x5m"
     assert pd.Timestamp(candidates.iloc[-1]["confirmation_timestamp"]) == pd.Timestamp(candidates.iloc[-1]["signal_timestamp"])
+
+
+def test_build_theme_candidates_can_reset_paths_after_large_gap():
+    timestamps = [
+        pd.Timestamp("2026-06-09T14:05:00Z"),
+        pd.Timestamp("2026-06-09T14:10:00Z"),
+        pd.Timestamp("2026-06-09T14:30:00Z"),
+        pd.Timestamp("2026-06-09T14:35:00Z"),
+    ]
+    rows: list[dict[str, object]] = []
+    flow_rows: list[dict[str, object]] = []
+
+    close_paths = {
+        "AAA": [10.0, 10.2, 10.4, 10.6],
+        "BBB": [20.0, 20.2, 20.4, 20.6],
+        "CCC": [30.0, 30.2, 30.4, 30.6],
+    }
+
+    for symbol, closes in close_paths.items():
+        prev = closes[0]
+        for ts, close in zip(timestamps, closes):
+            rows.append(
+                {
+                    "timestamp": ts,
+                    "open": prev,
+                    "high": max(prev, close),
+                    "low": min(prev, close),
+                    "close": close,
+                    "volume": 1000.0,
+                    "symbol": symbol,
+                    "vwap": (prev + close) / 2.0,
+                    "source": "synthetic",
+                    "date": ts.date(),
+                }
+            )
+            bar_open = ts - pd.Timedelta(minutes=5)
+            for minute_offset in range(5):
+                flow_rows.append(
+                    {
+                        "ticker": symbol,
+                        "minute": bar_open + pd.Timedelta(minutes=minute_offset),
+                        "imbalance_proxy": 8.0,
+                        "dollar_volume": 2000.0,
+                        "buy_vol_proxy": 1200.0,
+                        "sell_vol_proxy": 800.0,
+                        "large_trade_dollar_volume": 500.0,
+                        "off_exchange_volume": 100.0,
+                        "volume": 300.0,
+                        "trade_count": 10.0,
+                    }
+                )
+            prev = close
+
+    candidates = build_theme_candidates_from_market_data(
+        pd.DataFrame(rows),
+        pd.DataFrame(flow_rows),
+        trade_date="2026-06-09",
+        lookback_bars=2,
+        top_symbols=3,
+        min_members=3,
+        min_theme_score=0.0,
+        min_pair_corr=-1.0,
+        theme_path_max_gap="10min",
+    )
+
+    assert not candidates.empty
+    assert list(candidates["theme_path_id"].unique()) == ["T0001", "T0002"]

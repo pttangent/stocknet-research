@@ -25,6 +25,12 @@ THEME_CANDIDATE_COLUMNS = [
     "confirmation_match_score",
     "radar_score_5m",
     "confirmation_score_5m",
+    "price_theme_score",
+    "flow_theme_score",
+    "confirmed_by_flow",
+    "flow_breadth",
+    "large_trade_breadth",
+    "imbalance_breadth",
     "coherence_5m",
     "breadth_5m",
     "relative_return_5m",
@@ -107,6 +113,8 @@ def build_theme_candidates_from_market_data(
     max_members_per_candidate: int = 25,
     theme_path_score_method: str = "jaccard",
     theme_path_min_overlap: float = 0.40,
+    theme_path_max_gap: pd.Timedelta | str | None = None,
+    theme_path_reset_on_trade_date_change: bool = False,
 ) -> pd.DataFrame:
     if bars_5m.empty:
         return pd.DataFrame(columns=THEME_CANDIDATE_COLUMNS)
@@ -163,6 +171,8 @@ def build_theme_candidates_from_market_data(
         timestamp_col="signal_timestamp",
         min_overlap=theme_path_min_overlap,
         score_method=theme_path_score_method,
+        max_gap=theme_path_max_gap,
+        reset_on_trade_date_change=theme_path_reset_on_trade_date_change,
     )
     fifteen_minute_candidates = _build_15m_confirmation_candidates(
         bars_5m,
@@ -217,6 +227,7 @@ def _add_causal_features(frame: pd.DataFrame) -> pd.DataFrame:
     output["ret_15m_past"] = by_symbol["close"].pct_change(3)
     output["volume_z_12"] = by_symbol["volume"].transform(lambda s: _rolling_zscore(s, 12))
     output["imbalance_z_12"] = by_symbol["imbalance_proxy"].transform(lambda s: _rolling_zscore(s, 12))
+    output["dollar_volume_z_12"] = by_symbol["dollar_volume"].transform(lambda s: _rolling_zscore(s, 12))
     output["liquidity_score"] = by_symbol["dollar_volume_5m"].transform(lambda s: s.shift(1).rolling(12, min_periods=3).median())
     output["large_trade_ratio"] = np.where(
         output["dollar_volume"].abs() > 0,
@@ -228,13 +239,29 @@ def _add_causal_features(frame: pd.DataFrame) -> pd.DataFrame:
         output["off_exchange_volume"] / output["volume"].replace(0, np.nan),
         0.0,
     )
-    for column in ["ret_5m_past", "ret_15m_past", "volume_z_12", "imbalance_z_12"]:
+    output["large_trade_ratio_z_12"] = by_symbol["large_trade_ratio"].transform(lambda s: _rolling_zscore(s, 12))
+    output["off_exchange_ratio_z_12"] = by_symbol["off_exchange_ratio"].transform(lambda s: _rolling_zscore(s, 12))
+    for column in [
+        "ret_5m_past",
+        "ret_15m_past",
+        "volume_z_12",
+        "imbalance_z_12",
+        "dollar_volume_z_12",
+        "large_trade_ratio_z_12",
+        "off_exchange_ratio_z_12",
+    ]:
         output[f"{column}_xs"] = output.groupby("timestamp", sort=False)[column].transform(_cross_sectional_zscore)
     output["seed_score"] = (
         0.35 * output["ret_5m_past_xs"].fillna(0.0)
         + 0.20 * output["ret_15m_past_xs"].fillna(0.0)
         + 0.20 * output["volume_z_12_xs"].fillna(0.0)
         + 0.25 * output["imbalance_z_12_xs"].fillna(0.0)
+    )
+    output["flow_impulse_score"] = (
+        0.35 * output["dollar_volume_z_12_xs"].fillna(0.0)
+        + 0.30 * output["imbalance_z_12_xs"].fillna(0.0)
+        + 0.20 * output["large_trade_ratio_z_12_xs"].fillna(0.0)
+        + 0.15 * output["off_exchange_ratio_z_12_xs"].fillna(0.0)
     )
     return output
 
@@ -367,7 +394,8 @@ def _build_candidate_frame(
         if history.empty:
             continue
         pivot = history.pivot(index="timestamp", columns="symbol", values="ret_5m_past").sort_index()
-        if len(pivot) < max(lookback_bars, 3):
+        min_required_bars = max(2, min(int(lookback_bars), 3))
+        if len(pivot) < min_required_bars:
             continue
         pivot = pivot.tail(lookback_bars)
         corr = pivot.corr(min_periods=max(3, lookback_bars // 2)).fillna(0.0)
@@ -393,7 +421,23 @@ def _build_candidate_frame(
             volume_expansion = float(member_slice["volume_z_12"].mean())
             radar_score = float(member_slice["seed_score"].mean())
             confirmation_score = 0.6 * coherence + 0.4 * breadth
-            theme_score = 0.4 * radar_score + 0.3 * confirmation_score + 0.3 * max(relative_return, 0.0)
+            price_theme_score = float(
+                0.45 * member_slice["ret_5m_past_xs"].fillna(0.0).mean()
+                + 0.25 * member_slice["ret_15m_past_xs"].fillna(0.0).mean()
+                + 0.30 * member_slice["volume_z_12_xs"].fillna(0.0).mean()
+            )
+            flow_breadth = float((member_slice["flow_impulse_score"].fillna(0.0) > 0.0).mean())
+            large_trade_breadth = float((member_slice["large_trade_ratio"].fillna(0.0) > 0.0).mean())
+            imbalance_breadth = float((member_slice["imbalance_proxy"].fillna(0.0) > 0.0).mean())
+            flow_theme_score = float(
+                0.30 * member_slice["flow_impulse_score"].fillna(0.0).mean()
+                + 0.25 * flow_breadth
+                + 0.20 * imbalance_breadth
+                + 0.15 * large_trade_breadth
+                + 0.10 * member_slice["off_exchange_ratio"].fillna(0.0).mean()
+            )
+            lifecycle_score = confirmation_score
+            theme_score = 0.55 * price_theme_score + 0.30 * flow_theme_score + 0.15 * lifecycle_score
             if theme_score < min_theme_score:
                 continue
             candidate_rows.append(
@@ -405,6 +449,12 @@ def _build_candidate_frame(
                     "member_count": len(members),
                     "radar_score_5m": radar_score,
                     "confirmation_score_5m": confirmation_score,
+                    "price_theme_score": price_theme_score,
+                    "flow_theme_score": flow_theme_score,
+                    "confirmed_by_flow": bool(flow_theme_score > 0.0),
+                    "flow_breadth": flow_breadth,
+                    "large_trade_breadth": large_trade_breadth,
+                    "imbalance_breadth": imbalance_breadth,
                     "coherence_5m": coherence,
                     "breadth_5m": breadth,
                     "relative_return_5m": relative_return,

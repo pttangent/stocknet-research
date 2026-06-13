@@ -111,6 +111,7 @@ def main() -> None:
 
     bundle["selections"].to_csv(output_dir / "walk_forward_rule_selection.csv", index=False)
     bundle["strategy_trades"].to_parquet(output_dir / "walk_forward_strategy_trades.parquet", index=False)
+    bundle["strategy_daily_pnl"].to_csv(output_dir / "walk_forward_strategy_daily_pnl.csv", index=False)
     bundle["split_summary"].to_csv(output_dir / "walk_forward_strategy_split_summary.csv", index=False)
     bundle["robustness_scan"].to_csv(output_dir / "strategy_robustness_scan.csv", index=False)
     (output_dir / "walk_forward_strategy_summary.json").write_text(
@@ -119,6 +120,10 @@ def main() -> None:
     )
     (output_dir / "strategy_robustness_summary.json").write_text(
         json.dumps(bundle["robustness_summary"], indent=2, ensure_ascii=False),
+        encoding="utf-8",
+    )
+    (output_dir / "walk_forward_strategy_accounting.json").write_text(
+        json.dumps(bundle["strategy_accounting"], indent=2, ensure_ascii=False),
         encoding="utf-8",
     )
     (output_dir / "walk_forward_strategy_report.md").write_text(bundle["strategy_report"], encoding="utf-8")
@@ -155,9 +160,11 @@ def main() -> None:
         {
             "walk_forward_rule_selection_csv": output_dir / "walk_forward_rule_selection.csv",
             "walk_forward_strategy_trades_parquet": output_dir / "walk_forward_strategy_trades.parquet",
+            "walk_forward_strategy_daily_pnl_csv": output_dir / "walk_forward_strategy_daily_pnl.csv",
             "walk_forward_strategy_split_summary_csv": output_dir / "walk_forward_strategy_split_summary.csv",
             "strategy_robustness_scan_csv": output_dir / "strategy_robustness_scan.csv",
             "walk_forward_strategy_summary_json": output_dir / "walk_forward_strategy_summary.json",
+            "walk_forward_strategy_accounting_json": output_dir / "walk_forward_strategy_accounting.json",
             "strategy_robustness_summary_json": output_dir / "strategy_robustness_summary.json",
             "walk_forward_strategy_report_md": output_dir / "walk_forward_strategy_report.md",
             "walk_forward_strategy_self_audit_md": output_dir / "walk_forward_strategy_self_audit.md",

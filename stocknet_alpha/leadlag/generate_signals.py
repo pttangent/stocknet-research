@@ -28,9 +28,12 @@ SIGNAL_COLUMNS = [
     "leader_symbol",
     "follower_symbol",
     "signal_type",
+    "source_feature",
     "lag_minutes",
     "leadlag_score",
     "best_lag_correlation",
+    "leader_feature_value",
+    "follower_feature_value",
     "confirmed_on_15m",
     "theme_score",
 ]
@@ -39,6 +42,8 @@ SIGNAL_COLUMNS = [
 def generate_leadlag_signals(
     bars_1m: pd.DataFrame,
     candidates: pd.DataFrame,
+    *,
+    features_1m: pd.DataFrame | None = None,
     lookback_minutes: int = 60,
     max_lag: int = 5,
     top_followers: int = 3,
@@ -59,6 +64,7 @@ def generate_leadlag_signals(
     bars["close"] = bars["close"].astype(float)
     bars["volume"] = bars["volume"].astype(float)
 
+    feature_frame = _prepare_feature_frame(features_1m)
     signal_rows: list[dict[str, object]] = []
 
     for _, candidate in candidates.iterrows():
@@ -119,13 +125,35 @@ def generate_leadlag_signals(
                 "leader_symbol": leader,
                 "follower_symbol": str(follower),
                 "signal_type": "leadlag_return",
+                "source_feature": "ret_1m_past",
                 "lag_minutes": lag_minutes,
                 "leadlag_score": float(score),
                 "best_lag_correlation": float(best_corr),
+                "leader_feature_value": float(returns[leader].iloc[-1]) if not returns.empty else np.nan,
+                "follower_feature_value": float(returns[str(follower)].iloc[-1]) if not returns.empty else np.nan,
                 "confirmed_on_15m": bool(candidate.get("confirmed_on_15m", False)),
                 "theme_score": float(candidate.get("theme_score", 0.0) or 0.0),
             }
             signal_rows.append(row)
+
+        if feature_frame is None:
+            continue
+
+        feature_history = feature_frame[
+            (feature_frame["symbol"].isin(top_members))
+            & (feature_frame["bar_end"] <= signal_timestamp)
+            & (feature_frame["timestamp"] >= signal_timestamp - pd.Timedelta(minutes=lookback_minutes))
+        ].copy()
+        if feature_history.empty:
+            continue
+        flow_rows = _build_flow_leadlag_rows(
+            feature_history,
+            candidate=candidate,
+            signal_timestamp=signal_timestamp,
+            max_lag=max_lag,
+            top_followers=top_followers,
+        )
+        signal_rows.extend(flow_rows)
 
     if not signal_rows:
         return pd.DataFrame(columns=SIGNAL_COLUMNS)
@@ -155,6 +183,82 @@ def load_theme_candidates(paths: AlphaPaths, trade_date: str, input_path: Path |
 
 def _coerce_members(raw_members: object) -> list[str]:
     return [member.strip().upper() for member in str(raw_members).split(",") if member.strip()]
+
+
+def _prepare_feature_frame(features_1m: pd.DataFrame | None) -> pd.DataFrame | None:
+    if features_1m is None or features_1m.empty:
+        return None
+    frame = features_1m.copy()
+    frame["timestamp"] = pd.to_datetime(frame["timestamp"], utc=True)
+    frame["bar_end"] = frame["timestamp"] + pd.Timedelta(minutes=1)
+    frame["symbol"] = frame["symbol"].astype(str).str.upper()
+    for column in ["flow_impulse_score", "ret_1m_past"]:
+        if column not in frame.columns:
+            frame[column] = np.nan
+        frame[column] = pd.to_numeric(frame[column], errors="coerce")
+    return frame.sort_values(["symbol", "timestamp"]).drop_duplicates(subset=["symbol", "timestamp"], keep="last").reset_index(drop=True)
+
+
+def _build_flow_leadlag_rows(
+    feature_history: pd.DataFrame,
+    *,
+    candidate: pd.Series,
+    signal_timestamp: pd.Timestamp,
+    max_lag: int,
+    top_followers: int,
+) -> list[dict[str, object]]:
+    flow_pivot = feature_history.pivot(index="timestamp", columns="symbol", values="flow_impulse_score").sort_index().ffill()
+    return_pivot = feature_history.pivot(index="timestamp", columns="symbol", values="ret_1m_past").sort_index().fillna(0.0)
+    shared = [symbol for symbol in flow_pivot.columns if symbol in return_pivot.columns]
+    if len(shared) < 2:
+        return []
+
+    scores: dict[tuple[str, str], tuple[int, float]] = {}
+    outbound: dict[str, float] = {symbol: 0.0 for symbol in shared}
+    for leader in shared:
+        for follower in shared:
+            if leader == follower:
+                continue
+            lag_minutes, corr = _best_lag(flow_pivot[leader].fillna(0.0), return_pivot[follower].fillna(0.0), max_lag=max_lag)
+            if corr > 0.0:
+                scores[(leader, follower)] = (lag_minutes, corr)
+                outbound[leader] += corr
+    if not scores:
+        return []
+
+    selected_leader = max(outbound.items(), key=lambda item: item[1])[0]
+    ranked = sorted(
+        ((follower, payload[0], payload[1]) for (leader, follower), payload in scores.items() if leader == selected_leader),
+        key=lambda item: item[2],
+        reverse=True,
+    )[:top_followers]
+    rows: list[dict[str, object]] = []
+    for follower, lag_minutes, corr in ranked:
+        leader_feature_value = float(flow_pivot[selected_leader].iloc[-1]) if not flow_pivot.empty else np.nan
+        follower_feature_value = float(return_pivot[follower].iloc[-1]) if not return_pivot.empty else np.nan
+        rows.append(
+            {
+                "trade_date": signal_timestamp.date().isoformat(),
+                "signal_timestamp": signal_timestamp,
+                "feature_max_timestamp": pd.Timestamp(feature_history["bar_end"].max()),
+                "decision_timestamp": signal_timestamp,
+                "execution_timestamp": signal_timestamp + pd.Timedelta(minutes=1),
+                "theme_path_id": candidate.get("theme_path_id", ""),
+                "community_id": candidate.get("community_id", ""),
+                "leader_symbol": selected_leader,
+                "follower_symbol": follower,
+                "signal_type": "leadlag_flow_to_return",
+                "source_feature": "flow_impulse_score",
+                "lag_minutes": int(lag_minutes),
+                "leadlag_score": float(corr),
+                "best_lag_correlation": float(corr),
+                "leader_feature_value": leader_feature_value,
+                "follower_feature_value": follower_feature_value,
+                "confirmed_on_15m": bool(candidate.get("confirmed_on_15m", False)),
+                "theme_score": float(candidate.get("theme_score", 0.0) or 0.0),
+            }
+        )
+    return rows
 
 
 def _best_lag(leader_returns: pd.Series, follower_returns: pd.Series, max_lag: int) -> tuple[int, float]:

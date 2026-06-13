@@ -16,6 +16,7 @@ from stocknet_alpha.backtest.audit import (
     render_audit_checks,
 )
 from stocknet_alpha.backtest.walk_forward_strategy import run_walk_forward_strategy
+from stocknet_alpha.backtest.walk_forward_strategy import build_strategy_accounting
 
 
 def build_strategy_robustness_scan(
@@ -173,9 +174,12 @@ def run_final_leadlag_pipeline(
         strategy_trades,
         audit_checks=audit_checks,
     )
+    strategy_daily_pnl, strategy_accounting = build_strategy_accounting(strategy_trades)
     return {
         "selections": selections,
         "strategy_trades": strategy_trades,
+        "strategy_daily_pnl": strategy_daily_pnl,
+        "strategy_accounting": strategy_accounting,
         "split_summary": split_summary,
         "selection_summary": selection_summary,
         "strategy_report": strategy_report,

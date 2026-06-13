@@ -32,6 +32,7 @@ from stocknet_alpha.backtest.historical_leadlag import (
 )
 from stocknet_alpha.backtest.robustness import summarize_robustness
 from stocknet_alpha.config import AlphaPaths
+from stocknet_alpha.data.us_market_data import build_intraday_features
 from stocknet_alpha.leadlag.evaluate_edges import evaluate_leadlag_signals
 from stocknet_alpha.leadlag.generate_signals import generate_leadlag_signals
 from stocknet_alpha.theme.build_historical_theme_candidates import load_daily_market_inputs
@@ -99,6 +100,7 @@ def main() -> None:
         try:
             bars_5m, flow_1m = load_daily_market_inputs(paths, trade_date)
             bars_1m = pd.read_parquet(paths.raw_1m_path(trade_date))
+            features_1m = build_intraday_features(bars_1m, flow_1m)
         except Exception as exc:  # keep the batch moving
             daily_rows.append({"trade_date": trade_date, "status": "load_failed", "error": str(exc)})
             continue
@@ -118,6 +120,7 @@ def main() -> None:
         signals = generate_leadlag_signals(
             bars_1m,
             candidates,
+            features_1m=features_1m,
             lookback_minutes=args.lookback_minutes,
             max_lag=args.max_lag,
             top_followers=args.top_followers,

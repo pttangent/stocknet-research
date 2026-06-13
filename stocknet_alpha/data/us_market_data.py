@@ -408,16 +408,18 @@ def build_split_adjustment_factors(splits: pd.DataFrame, trading_dates: Sequence
 
     frame = splits.copy()
     frame["symbol"] = frame["symbol"].astype(str).str.upper()
-    frame["date"] = pd.to_datetime(frame["date"]).dt.date
+    if "split_date" not in frame.columns and "date" in frame.columns:
+        frame = frame.rename(columns={"date": "split_date"})
+    frame["split_date"] = pd.to_datetime(frame["split_date"]).dt.date
     frame["split_multiplier"] = pd.to_numeric(frame["to"], errors="coerce") / pd.to_numeric(frame["from"], errors="coerce")
     unique_dates = [pd.Timestamp(date).date() for date in trading_dates]
 
     rows: list[dict[str, object]] = []
     for symbol, group in frame.groupby("symbol", sort=True):
-        group = group.sort_values("date")
+        group = group.sort_values("split_date")
         for trade_date in unique_dates:
-            past = group.loc[group["date"] <= trade_date, "split_multiplier"]
-            future = group.loc[group["date"] > trade_date, "split_multiplier"]
+            past = group.loc[group["split_date"] <= trade_date, "split_multiplier"]
+            future = group.loc[group["split_date"] > trade_date, "split_multiplier"]
             cumulative_split_multiplier = float(past.prod()) if not past.empty else 1.0
             future_split_multiplier = float(future.prod()) if not future.empty else 1.0
             price_adjustment_factor = 1.0 / future_split_multiplier
@@ -472,6 +474,11 @@ def build_intraday_features(bars_1m: pd.DataFrame, trade_flow_1m: pd.DataFrame) 
         merged["large_trade_dollar_volume"].fillna(0) / merged["dollar_volume"].fillna(0),
         0.0,
     )
+    merged["off_exchange_ratio"] = np.where(
+        merged["volume"].fillna(0) > 0,
+        merged["off_exchange_volume"].fillna(0) / merged["volume"].fillna(0),
+        0.0,
+    )
     merged["price_impact_proxy"] = np.where(
         merged["dollar_volume"].fillna(0) > 0,
         (merged["close"] - merged["open"]).abs() / merged["dollar_volume"].replace(0, np.nan),
@@ -488,6 +495,26 @@ def build_intraday_features(bars_1m: pd.DataFrame, trade_flow_1m: pd.DataFrame) 
             lambda series: series.shift(1).rolling(30, min_periods=1).mean()
         )
         merged[output] = np.where(rolling_mean > 0, merged[source_column] / rolling_mean - 1, np.nan)
+
+    for source_column, output in [
+        ("imbalance_proxy", "imbalance_z"),
+        ("large_trade_ratio", "large_trade_ratio_z"),
+        ("off_exchange_ratio", "off_exchange_ratio_z"),
+    ]:
+        rolling_mean = merged.groupby("symbol", sort=False)[source_column].transform(
+            lambda series: series.shift(1).rolling(30, min_periods=3).mean()
+        )
+        rolling_std = merged.groupby("symbol", sort=False)[source_column].transform(
+            lambda series: series.shift(1).rolling(30, min_periods=3).std(ddof=0)
+        )
+        merged[output] = ((merged[source_column] - rolling_mean) / rolling_std.replace(0, np.nan)).replace([np.inf, -np.inf], np.nan)
+
+    merged["flow_impulse_score"] = (
+        0.35 * merged["dollar_volume_z_proxy"].fillna(0.0)
+        + 0.25 * merged["trade_count_z_proxy"].fillna(0.0)
+        + 0.25 * merged["imbalance_z"].fillna(0.0)
+        + 0.15 * merged["large_trade_ratio_z"].fillna(0.0)
+    )
 
     return merged
 
@@ -1029,7 +1056,7 @@ def write_reference_tables(
     trade_dates: Sequence[str],
 ) -> tuple[Path, Path]:
     splits = load_splits_csv(splits_csv_path)
-    split_factors = build_split_adjustment_factors(splits.rename(columns={"split_date": "date"}), trade_dates)
+    split_factors = build_split_adjustment_factors(splits, trade_dates)
     splits_path = paths.ensure_parent(paths.splits_path())
     split_factors_path = paths.ensure_parent(paths.split_factors_path())
     splits.to_parquet(splits_path, index=False)

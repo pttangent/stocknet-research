@@ -8,6 +8,7 @@ import pandas as pd
 from stocknet_alpha.backtest.backtest_signals import summarize_signal_backtest
 from stocknet_alpha.config import AlphaPaths, load_universe_symbols
 from stocknet_alpha.data.resample_bars import resample_ohlcv_bars, write_resampled_bars
+from stocknet_alpha.data.us_market_data import build_intraday_features
 from stocknet_alpha.leadlag.evaluate_edges import evaluate_leadlag_signals
 from stocknet_alpha.leadlag.generate_signals import generate_leadlag_signals
 from stocknet_alpha.theme.build_theme_candidates import build_theme_candidates_from_state
@@ -248,3 +249,107 @@ def test_generate_leadlag_signals_handles_duplicate_symbol_timestamps():
     )
 
     assert isinstance(signals, pd.DataFrame)
+
+
+def test_generate_leadlag_signals_emits_flow_to_return_signals_when_features_are_available():
+    timestamps = pd.date_range("2026-06-09T14:00:00Z", periods=12, freq="1min")
+    bars_rows: list[dict[str, object]] = []
+    flow_rows: list[dict[str, object]] = []
+
+    closes_by_symbol = {
+        "AAA": [10.00, 10.10, 10.10, 10.25, 10.25, 10.40, 10.40, 10.55, 10.55, 10.70, 10.70, 10.85],
+        "BBB": [20.00, 20.00, 20.05, 20.05, 20.20, 20.20, 20.35, 20.35, 20.50, 20.50, 20.65, 20.65],
+        "CCC": [30.00] * 12,
+    }
+    volume_by_symbol = {"AAA": 1000.0, "BBB": 900.0, "CCC": 300.0}
+    imbalance_by_symbol = {"AAA": 0.9, "BBB": 0.2, "CCC": 0.0}
+
+    for symbol, closes in closes_by_symbol.items():
+        previous = closes[0]
+        for idx, (ts, close) in enumerate(zip(timestamps, closes)):
+            bars_rows.append(
+                {
+                    "symbol": symbol,
+                    "timestamp": ts,
+                    "open": previous,
+                    "high": max(previous, close),
+                    "low": min(previous, close),
+                    "close": close,
+                    "volume": volume_by_symbol[symbol],
+                    "dollar_volume": close * volume_by_symbol[symbol],
+                    "vwap": (previous + close) / 2.0,
+                    "source": "synthetic",
+                }
+            )
+            flow_rows.append(
+                {
+                    "ticker": symbol,
+                    "minute": ts,
+                    "trade_count": 20 if symbol != "CCC" else 5,
+                    "volume": volume_by_symbol[symbol],
+                    "dollar_volume": close * volume_by_symbol[symbol],
+                    "vwap": (previous + close) / 2.0,
+                    "avg_trade_size": 50.0,
+                    "median_trade_size": 50.0,
+                    "max_trade_size": 200.0,
+                    "buy_vol_proxy": volume_by_symbol[symbol] * (0.5 + imbalance_by_symbol[symbol] / 2.0),
+                    "sell_vol_proxy": volume_by_symbol[symbol] * (0.5 - imbalance_by_symbol[symbol] / 2.0),
+                    "buy_trade_count_proxy": 12,
+                    "sell_trade_count_proxy": 8,
+                    "uptick_count": 10,
+                    "downtick_count": 4,
+                    "zero_tick_count": 0,
+                    "imbalance_proxy": imbalance_by_symbol[symbol],
+                    "trade_count_imbalance_proxy": 0.2,
+                    "large_trade_count": 2 if symbol == "AAA" else 0,
+                    "large_trade_volume": 250.0 if symbol == "AAA" else 0.0,
+                    "large_trade_dollar_volume": close * 250.0 if symbol == "AAA" else 0.0,
+                    "large_trade_buy_vol_proxy": 250.0 if symbol == "AAA" else 0.0,
+                    "large_trade_sell_vol_proxy": 0.0,
+                    "odd_lot_trade_count": 0,
+                    "odd_lot_volume": 0.0,
+                    "block_trade_count": 0,
+                    "block_trade_volume": 0.0,
+                    "lit_volume": volume_by_symbol[symbol],
+                    "off_exchange_volume": 0.0,
+                    "lit_trade_count": 20,
+                    "off_exchange_trade_count": 0,
+                    "correction_count": 0,
+                    "unique_exchange_count": 1,
+                    "avg_report_lag_ns": 1_000.0,
+                    "max_report_lag_ns": 1_000.0,
+                }
+            )
+            previous = close
+
+    bars_1m = pd.DataFrame(bars_rows)
+    trade_flow_1m = pd.DataFrame(flow_rows)
+    features_1m = build_intraday_features(bars_1m, trade_flow_1m)
+    candidates = pd.DataFrame(
+        [
+            {
+                "signal_timestamp": pd.Timestamp("2026-06-09T14:11:00Z"),
+                "theme_path_id": "T001",
+                "community_id": "C001",
+                "members": "AAA,BBB,CCC",
+                "member_count": 3,
+                "confirmed_on_15m": True,
+                "theme_score": 0.85,
+            }
+        ]
+    )
+
+    signals = generate_leadlag_signals(
+        bars_1m,
+        candidates,
+        features_1m=features_1m,
+        lookback_minutes=10,
+        max_lag=3,
+        top_followers=2,
+    )
+
+    assert "leadlag_flow_to_return" in set(signals["signal_type"])
+    flow_signal = signals.loc[signals["signal_type"] == "leadlag_flow_to_return"].iloc[0]
+    assert flow_signal["source_feature"] == "flow_impulse_score"
+    assert flow_signal["leader_feature_value"] > 0
+    assert "future_ret_1m" not in signals.columns

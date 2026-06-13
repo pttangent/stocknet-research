@@ -13,6 +13,54 @@ from stocknet_alpha.backtest.rule_selection import (
 )
 
 
+def build_strategy_accounting(
+    strategy_trades: pd.DataFrame,
+    *,
+    market_timezone: str = "America/New_York",
+) -> tuple[pd.DataFrame, dict[str, float | int | None]]:
+    if strategy_trades.empty:
+        empty = pd.DataFrame(columns=["trade_date", "daily_pnl", "daily_turnover", "gross_exposure", "net_exposure", "trade_count"])
+        return empty, {
+            "total_trades": 0,
+            "total_pnl": 0.0,
+            "max_drawdown": None,
+            "max_concurrent_positions": 0,
+            "symbol_concentration": None,
+        }
+
+    frame = strategy_trades.copy()
+    frame["entry_time"] = pd.to_datetime(frame.get("entry_time"), utc=True, errors="coerce")
+    frame["exit_time"] = pd.to_datetime(frame.get("exit_time"), utc=True, errors="coerce")
+    frame["decision_timestamp"] = pd.to_datetime(frame.get("decision_timestamp"), utc=True, errors="coerce")
+    frame["effective_entry_time"] = frame["entry_time"].fillna(frame["decision_timestamp"])
+    frame["effective_exit_time"] = frame["exit_time"].fillna(frame["effective_entry_time"])
+    frame["net_return"] = pd.to_numeric(frame.get("net_return", 0.0), errors="coerce").fillna(0.0)
+    frame["trade_date"] = frame["effective_entry_time"].dt.tz_convert(market_timezone).dt.date.astype(str)
+    daily = (
+        frame.groupby("trade_date", sort=True)
+        .agg(
+            daily_pnl=("net_return", "sum"),
+            daily_turnover=("net_return", "size"),
+            trade_count=("net_return", "size"),
+        )
+        .reset_index()
+    )
+    daily["gross_exposure"] = daily["trade_count"].astype(float)
+    daily["net_exposure"] = daily["trade_count"].astype(float)
+    daily["cumulative_pnl"] = daily["daily_pnl"].cumsum()
+    daily["running_peak"] = daily["cumulative_pnl"].cummax()
+    daily["drawdown"] = daily["cumulative_pnl"] - daily["running_peak"]
+
+    metrics = {
+        "total_trades": int(len(frame)),
+        "total_pnl": float(frame["net_return"].sum()),
+        "max_drawdown": float(daily["drawdown"].min()) if not daily.empty else None,
+        "max_concurrent_positions": _max_concurrent_positions(frame),
+        "symbol_concentration": _symbol_concentration(frame),
+    }
+    return daily, metrics
+
+
 def materialize_walk_forward_strategy(
     evaluated_trades: pd.DataFrame,
     selections: pd.DataFrame,
@@ -106,6 +154,8 @@ def build_walk_forward_strategy_report(
     split_summary: pd.DataFrame,
     aggregate_summary: pd.DataFrame,
     selection_summary: dict[str, float | int | None],
+    *,
+    strategy_accounting: tuple[pd.DataFrame, dict[str, float | int | None]] | None = None,
 ) -> str:
     lines = [
         "# Walk-Forward Lead-Lag Strategy",
@@ -124,6 +174,22 @@ def build_walk_forward_strategy_report(
     lines.append(split_summary.to_string(index=False) if not split_summary.empty else "No split trades.")
     lines.extend(["", "## Aggregate Summary", ""])
     lines.append(aggregate_summary.to_string(index=False) if not aggregate_summary.empty else "No aggregate trades.")
+    if strategy_accounting is not None:
+        daily_pnl, metrics = strategy_accounting
+        lines.extend(
+            [
+                "",
+                "## Strategy Accounting",
+                "",
+                f"- Total trades: `{metrics.get('total_trades')}`",
+                f"- Total pnl: `{_fmt_number(metrics.get('total_pnl'))}`",
+                f"- Max drawdown: `{_fmt_number(metrics.get('max_drawdown'))}`",
+                f"- Max concurrent positions: `{metrics.get('max_concurrent_positions')}`",
+                f"- Symbol concentration: `{_fmt_number(metrics.get('symbol_concentration'))}`",
+                "",
+                daily_pnl.to_string(index=False) if not daily_pnl.empty else "No daily pnl rows.",
+            ]
+        )
     lines.append("")
     return "\n".join(lines)
 
@@ -164,7 +230,12 @@ def run_walk_forward_strategy(
     split_summary = summarize_walk_forward_strategy_splits(strategy_trades)
     aggregate_summary = aggregate_evaluated_trades(strategy_trades)
     selection_summary = summarize_walk_forward_results(selections)
-    report = build_walk_forward_strategy_report(split_summary, aggregate_summary, selection_summary)
+    report = build_walk_forward_strategy_report(
+        split_summary,
+        aggregate_summary,
+        selection_summary,
+        strategy_accounting=build_strategy_accounting(strategy_trades, market_timezone=market_timezone),
+    )
     return selections, strategy_trades, split_summary, selection_summary, report
 
 
@@ -176,3 +247,25 @@ def _fmt_number(value: float | int | None) -> str:
     if value is None or pd.isna(value):
         return "NA"
     return f"{float(value):.6f}"
+
+
+def _max_concurrent_positions(frame: pd.DataFrame) -> int:
+    events: list[tuple[pd.Timestamp, int]] = []
+    for _, row in frame.dropna(subset=["effective_entry_time", "effective_exit_time"]).iterrows():
+        events.append((pd.Timestamp(row["effective_entry_time"]), 1))
+        events.append((pd.Timestamp(row["effective_exit_time"]), -1))
+    current = 0
+    peak = 0
+    for _, delta in sorted(events, key=lambda item: (item[0], -item[1])):
+        current += delta
+        peak = max(peak, current)
+    return int(peak)
+
+
+def _symbol_concentration(frame: pd.DataFrame) -> float | None:
+    if "symbol" not in frame.columns:
+        return None
+    counts = frame["symbol"].astype(str).value_counts()
+    if counts.empty:
+        return None
+    return float(counts.max() / counts.sum())
