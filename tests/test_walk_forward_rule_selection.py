@@ -168,3 +168,57 @@ def test_select_walk_forward_rules_can_choose_confirmed_variant_when_it_wins_val
     assert pick["selected_rule_id"] == "regular_confirmed_theme_0.6"
     assert int(pick["selected_horizon_minutes"]) == 15
     assert round(float(pick["test_avg_net_return"]), 6) == 0.0016
+
+
+def test_select_walk_forward_rules_uses_signal_weighted_validation_return():
+    monthly = pd.DataFrame(
+        [
+            {"rule_id": "rule_a", "month": "2025-09", "horizon_minutes": 15, "signal_count": 120, "avg_net_return": 0.0010},
+            {"rule_id": "rule_a", "month": "2025-10", "horizon_minutes": 15, "signal_count": 120, "avg_net_return": 0.0011},
+            {"rule_id": "rule_a", "month": "2025-11", "horizon_minutes": 15, "signal_count": 120, "avg_net_return": 0.0012},
+            {"rule_id": "rule_a", "month": "2025-12", "horizon_minutes": 15, "signal_count": 100, "avg_net_return": 0.0005},
+            {"rule_id": "rule_a", "month": "2026-01", "horizon_minutes": 15, "signal_count": 5, "avg_net_return": 0.0100},
+            {"rule_id": "rule_a", "month": "2026-02", "horizon_minutes": 15, "signal_count": 80, "avg_net_return": 0.0008},
+            {"rule_id": "rule_b", "month": "2025-09", "horizon_minutes": 15, "signal_count": 120, "avg_net_return": 0.0009},
+            {"rule_id": "rule_b", "month": "2025-10", "horizon_minutes": 15, "signal_count": 120, "avg_net_return": 0.0010},
+            {"rule_id": "rule_b", "month": "2025-11", "horizon_minutes": 15, "signal_count": 120, "avg_net_return": 0.0011},
+            {"rule_id": "rule_b", "month": "2025-12", "horizon_minutes": 15, "signal_count": 50, "avg_net_return": 0.0015},
+            {"rule_id": "rule_b", "month": "2026-01", "horizon_minutes": 15, "signal_count": 50, "avg_net_return": 0.0015},
+            {"rule_id": "rule_b", "month": "2026-02", "horizon_minutes": 15, "signal_count": 80, "avg_net_return": 0.0010},
+        ]
+    )
+
+    selected = select_walk_forward_rules(
+        monthly,
+        train_months=3,
+        valid_months=2,
+        test_months=1,
+        min_train_count=200,
+    )
+
+    assert len(selected) == 1
+    pick = selected.iloc[0]
+    assert pick["selected_rule_id"] == "rule_b"
+    assert round(float(pick["valid_avg_net_return"]), 6) == 0.0015
+
+
+def test_select_walk_forward_rules_does_not_silently_fallback_when_strict_pool_is_empty():
+    monthly = pd.DataFrame(
+        [
+            {"rule_id": "rule_a", "month": "2025-09", "horizon_minutes": 15, "signal_count": 40, "avg_net_return": 0.0010},
+            {"rule_id": "rule_a", "month": "2025-10", "horizon_minutes": 15, "signal_count": 40, "avg_net_return": 0.0011},
+            {"rule_id": "rule_a", "month": "2025-11", "horizon_minutes": 15, "signal_count": 40, "avg_net_return": 0.0012},
+            {"rule_id": "rule_a", "month": "2025-12", "horizon_minutes": 15, "signal_count": 10, "avg_net_return": 0.0020},
+            {"rule_id": "rule_a", "month": "2026-01", "horizon_minutes": 15, "signal_count": 10, "avg_net_return": 0.0015},
+        ]
+    )
+
+    selected = select_walk_forward_rules(
+        monthly,
+        train_months=3,
+        valid_months=1,
+        test_months=1,
+        min_train_count=200,
+    )
+
+    assert selected.empty

@@ -702,8 +702,8 @@ class ThemeStateManager:
         snap_ts = snapshot_timestamp or timestamp
         obs_at = observed_at or timestamp
 
-        for idx, row in out.iterrows():
-            match = matches[idx]
+        for position, (idx, row) in enumerate(out.iterrows()):
+            match = matches[position]
             self.update_path(timestamp, frequency, row, match, snapshot_timestamp=snap_ts, observed_at=obs_at)
             self.write_event(timestamp, frequency, row, match, snapshot_timestamp=snap_ts, observed_at=obs_at)
 

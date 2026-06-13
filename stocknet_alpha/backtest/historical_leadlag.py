@@ -6,6 +6,8 @@ from typing import Any
 
 import pandas as pd
 
+from stocknet_alpha.backtest.audit import HISTORICAL_AUDIT_LABELS, render_audit_checks
+
 
 def aggregate_evaluated_trades(evaluated: pd.DataFrame) -> pd.DataFrame:
     if evaluated.empty:
@@ -50,20 +52,21 @@ def build_self_audit_report(
     metadata: Mapping[str, Any],
     aggregate_summary: pd.DataFrame,
 ) -> str:
-    lines = [
-        "# Lead-Lag Backtest Self-Audit",
-        "",
-        "## Five Checks",
-        "",
-        f"- 嚴查未來函數: `{metadata.get('lookahead_guard', 'UNKNOWN')}`",
-        f"- 規避倖存者偏差: `{metadata.get('survivorship_bias', 'UNKNOWN')}`",
-        f"- 檢驗參數魯棒性: `{metadata.get('robustness', 'UNKNOWN')}`",
-        f"- 堅守可解釋邏輯: `{metadata.get('logic_explainability', 'UNKNOWN')}`",
-        f"- 還原真實交易成本: `{metadata.get('cost_realism', 'UNKNOWN')}`",
-        "",
-        "## Aggregate Summary",
-        "",
-    ]
+    audit_checks = metadata.get("audit_checks")
+    if isinstance(audit_checks, Mapping):
+        checks = dict(audit_checks)
+    else:
+        checks = {
+            "lookahead_guard": {"status": metadata.get("lookahead_guard", "FAIL"), "evidence": "legacy audit metadata without structured evidence"},
+            "survivorship_bias": {"status": metadata.get("survivorship_bias", "FAIL"), "evidence": "legacy audit metadata without structured evidence"},
+            "robustness": {"status": metadata.get("robustness", "FAIL"), "evidence": "legacy audit metadata without structured evidence"},
+            "logic_explainability": {"status": metadata.get("logic_explainability", "FAIL"), "evidence": "legacy audit metadata without structured evidence"},
+            "cost_realism": {"status": metadata.get("cost_realism", "FAIL"), "evidence": "legacy audit metadata without structured evidence"},
+        }
+
+    lines = ["# Lead-Lag Backtest Self-Audit", ""]
+    lines.extend(render_audit_checks(checks, labels=HISTORICAL_AUDIT_LABELS))
+    lines.extend(["", "## Aggregate Summary", ""])
     if aggregate_summary.empty:
         lines.append("No evaluated trades.")
     else:

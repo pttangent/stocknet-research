@@ -44,6 +44,10 @@ def main() -> None:
     source_path = Path(args.evaluated_trades).expanduser().resolve()
     output_dir = Path(args.output_dir).expanduser().resolve()
     output_dir.mkdir(parents=True, exist_ok=True)
+    audit_summary_path = source_path.parent / "audit_summary.json"
+    audit_evidence: dict[str, object] = {}
+    if audit_summary_path.exists():
+        audit_evidence = json.loads(audit_summary_path.read_text(encoding="utf-8"))
 
     evaluated_path = source_path
     if args.relabel_confirmations:
@@ -75,6 +79,7 @@ def main() -> None:
         min_train_count=args.min_train_count,
         min_valid_count=args.min_valid_count,
         leadlag_threshold=args.leadlag_threshold,
+        audit_evidence=audit_evidence,
     )
 
     bundle["selections"].to_csv(output_dir / "walk_forward_rule_selection.csv", index=False)
@@ -103,6 +108,8 @@ def main() -> None:
                 "min_train_count": args.min_train_count,
                 "min_valid_count": args.min_valid_count,
                 "leadlag_threshold": args.leadlag_threshold,
+                "source_audit_summary": str(audit_summary_path) if audit_summary_path.exists() else None,
+                "audit_checks": bundle["audit_checks"],
             },
             indent=2,
             ensure_ascii=False,

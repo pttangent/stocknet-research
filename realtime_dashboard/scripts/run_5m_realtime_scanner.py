@@ -59,6 +59,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--chunk-size", type=int, default=200)
     parser.add_argument("--lookback-days", type=int, default=7)
     parser.add_argument("--enable-15m", action="store_true", help="Enable 15m confirmation layer (aggregated from 5m)")
+    parser.add_argument("--git-publish", action="store_true", help="Allow scanner artifacts to be committed and pushed explicitly.")
     parser.add_argument("--warmup-only", action="store_true")
     return parser.parse_args()
 
@@ -448,6 +449,14 @@ def dataframe_to_records(df: pd.DataFrame, limit: int = 20) -> list[dict]:
     return df.head(limit).to_dict("records")
 
 
+def _with_frequency(df: pd.DataFrame, frequency: str) -> pd.DataFrame:
+    if df.empty:
+        return df.copy()
+    output = df.copy()
+    output["frequency"] = frequency
+    return output
+
+
 class FrequencyRuntime:
     def __init__(self, config: RadarConfig):
         self.feature_engine = RollingFeatureEngine(config.feature)
@@ -463,9 +472,10 @@ def process_snapshot(
     window_bars_df: pd.DataFrame,
     snapshot_timestamp: datetime,
     observed_at: datetime,
+    frequency: str = "5m",
     theme_state_manager: Optional[ThemeStateManager] = None,
 ) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, list]:
-    """Process a single 5m snapshot."""
+    """Process a single snapshot at the requested frequency."""
     if window_bars_df.empty:
         return pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), []
 
@@ -497,21 +507,21 @@ def process_snapshot(
     if theme_state_manager is not None:
         communities_df = theme_state_manager.assign_and_update(
             timestamp=snapshot_timestamp,
-            frequency="5m",
+            frequency=frequency,
             communities_df=communities_df,
             memberships_df=memberships_df,
             snapshot_timestamp=snapshot_timestamp,
             observed_at=observed_at,
         )
 
-    alerts = runtime.alert_engine.process(snapshot_timestamp, communities_df, memberships_df, "5m")
+    alerts = runtime.alert_engine.process(snapshot_timestamp, communities_df, memberships_df, frequency)
 
     for alert in alerts:
         mask = communities_df["community_id"] == alert.community_id
         communities_df.loc[mask, "level"] = alert.level.value
         communities_df.loc[mask, "status"] = alert.status.value
 
-    runtime.tracker.record(snapshot_timestamp, "5m", communities_df, memberships_df, alerts)
+    runtime.tracker.record(snapshot_timestamp, frequency, communities_df, memberships_df, alerts)
     snapshot_df = runtime.tracker.get_snapshots_df()
     latest_snapshots = snapshot_df[snapshot_df["timestamp"] == snapshot_df["timestamp"].max()].copy()
     return latest_snapshots, memberships_df, edges_df, alerts
@@ -646,12 +656,13 @@ def main() -> None:
                         window_df,
                         snapshot_ts,
                         observed_at,
+                        frequency="5m",
                         theme_state_manager=theme_state_manager,
                     )
                     if not latest_5m_snapshots.empty:
-                        intraday_logger.log_snapshots(latest_5m_snapshots)
-                        intraday_logger.log_members(latest_5m_members)
-                        intraday_logger.log_edges(latest_5m_edges, snapshot_ts)
+                        intraday_logger.log_snapshots(_with_frequency(latest_5m_snapshots, "5m"))
+                        intraday_logger.log_members(_with_frequency(latest_5m_members, "5m"))
+                        intraday_logger.log_edges(_with_frequency(latest_5m_edges, "5m"), snapshot_ts)
                     if alerts_5m:
                         intraday_logger.log_alerts(pd.DataFrame([alert.to_dict() for alert in alerts_5m]))
                     last_processed_snapshot_ts = snapshot_ts
@@ -678,14 +689,13 @@ def main() -> None:
                                 window_15m,
                                 ts_15m,
                                 observed_at,
+                                frequency="15m",
                                 theme_state_manager=theme_state_manager,
                             )
                             if not latest_15m_snapshots.empty:
-                                # Log 15m results with frequency tag
-                                for _, row in latest_15m_snapshots.iterrows():
-                                    row_copy = row.copy()
-                                    row_copy["frequency"] = "15m"
-                                    # Need to append as DataFrame row
+                                intraday_logger.log_snapshots(_with_frequency(latest_15m_snapshots, "15m"))
+                                intraday_logger.log_members(_with_frequency(latest_15m_members, "15m"))
+                                intraday_logger.log_edges(_with_frequency(latest_15m_edges, "15m"), ts_15m)
                             if alerts_15m:
                                 intraday_logger.log_alerts(pd.DataFrame([alert.to_dict() for alert in alerts_15m]))
                             last_processed_15m_ts = ts_15m
@@ -718,8 +728,9 @@ def main() -> None:
         generate_alert_log(repo_root, payload)
 
         # Auto-commit state + logs to current branch (unified)
-        theme_count = payload.get("theme_state", {}).get("total_paths", 0)
-        git_commit_state(snapshot_ts, scan_number, theme_count)
+        if args.git_publish:
+            theme_count = payload.get("theme_state", {}).get("total_paths", 0)
+            git_commit_state(snapshot_ts, scan_number, theme_count)
 
         output_summary = {
             "scan_number": scan_number,

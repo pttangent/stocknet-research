@@ -120,6 +120,7 @@ def select_walk_forward_rules(
     min_train_count: int = 0,
     min_valid_count: int = 0,
     require_positive_train: bool = True,
+    allow_fallback: bool = False,
 ) -> pd.DataFrame:
     """Select rule and horizon using only prior months, then score on the test month."""
 
@@ -160,6 +161,8 @@ def select_walk_forward_rules(
             selected = strict_pool
             pool_name = "strict"
         else:
+            if not allow_fallback:
+                continue
             positive_pool = candidates[candidates["train_avg_net_return"] > 0.0] if require_positive_train else candidates.copy()
             if not positive_pool.empty:
                 selected = positive_pool
@@ -276,9 +279,9 @@ def _build_candidate_metrics(
                 "train_signal_count": int(train["signal_count"].sum()),
                 "valid_signal_count": int(valid["signal_count"].sum()),
                 "test_signal_count": int(test["signal_count"].sum()),
-                "train_avg_net_return": float(train["avg_net_return"].mean()),
-                "valid_avg_net_return": float(valid["avg_net_return"].mean()),
-                "test_avg_net_return": float(test["avg_net_return"].mean()),
+                "train_avg_net_return": _weighted_signal_return(train),
+                "valid_avg_net_return": _weighted_signal_return(valid),
+                "test_avg_net_return": _weighted_signal_return(test),
             }
         )
     return pd.DataFrame(rows)
@@ -288,3 +291,12 @@ def _fmt_number(value: float | int | None) -> str:
     if value is None or pd.isna(value):
         return "NA"
     return f"{float(value):.6f}"
+
+
+def _weighted_signal_return(frame: pd.DataFrame) -> float:
+    weights = pd.to_numeric(frame["signal_count"], errors="coerce").fillna(0.0)
+    returns = pd.to_numeric(frame["avg_net_return"], errors="coerce")
+    total_weight = float(weights.sum())
+    if total_weight <= 0:
+        return float(returns.mean())
+    return float((weights * returns).sum() / total_weight)

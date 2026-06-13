@@ -25,7 +25,23 @@ def load_daily_market_inputs(
     bars_source = Path(bars_path).expanduser().resolve() if bars_path else paths.bars_path(trade_date, "5m")
     flow_source = Path(trade_flow_path).expanduser().resolve() if trade_flow_path else paths.trade_flow_1m_path(trade_date)
     bars = pd.read_parquet(bars_source)
-    trade_flow = pd.read_parquet(flow_source)
+    if flow_source.exists():
+        trade_flow = pd.read_parquet(flow_source)
+    else:
+        trade_flow = pd.DataFrame(
+            columns=[
+                "ticker",
+                "minute",
+                "imbalance_proxy",
+                "dollar_volume",
+                "buy_vol_proxy",
+                "sell_vol_proxy",
+                "large_trade_dollar_volume",
+                "off_exchange_volume",
+                "volume",
+                "trade_count",
+            ]
+        )
     return bars, trade_flow
 
 

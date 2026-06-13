@@ -22,6 +22,9 @@ def assign_theme_paths(
     timestamp_col: str = "timestamp",
     min_overlap: float = 0.40,
     score_method: str = "jaccard",
+    max_gap: pd.Timedelta | str | None = None,
+    reset_on_trade_date_change: bool = False,
+    trade_date_col: str = "trade_date",
 ) -> pd.DataFrame:
     """Assign stable theme path IDs to chronological community rows.
 
@@ -35,6 +38,7 @@ def assign_theme_paths(
     frame = communities.copy()
     frame[timestamp_col] = pd.to_datetime(frame[timestamp_col], utc=True)
     frame = frame.sort_values([timestamp_col]).reset_index(drop=True)
+    gap_limit = pd.Timedelta(max_gap) if max_gap is not None else None
 
     active_paths: dict[str, _ThemePathState] = {}
     next_path_number = 1
@@ -50,6 +54,13 @@ def assign_theme_paths(
             for path_id, path in active_paths.items():
                 if path_id in used_paths:
                     continue
+                if gap_limit is not None and (timestamp - path.last_seen_time) > gap_limit:
+                    continue
+                if reset_on_trade_date_change and trade_date_col in frame.columns:
+                    current_trade_date = row.get(trade_date_col)
+                    path_trade_date = path.last_seen_time.date().isoformat()
+                    if pd.notna(current_trade_date) and str(current_trade_date) != path_trade_date:
+                        continue
                 score = _match_score(members, path.last_members, score_method=score_method)
                 if score > best_score:
                     best_score = score

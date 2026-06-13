@@ -127,3 +127,34 @@ def test_assign_theme_paths_can_use_overlap_on_smaller_community_size():
     assert assigned["theme_path_id"].nunique() == 1
     assert list(assigned["event_type"]) == ["birth", "continuation", "continuation"]
     assert list(assigned["age_bars"]) == [1, 2, 3]
+
+
+def test_assign_theme_paths_can_reset_identity_after_large_gap_or_new_session():
+    communities = pd.DataFrame(
+        [
+            {
+                "timestamp": "2026-03-03T15:55:00Z",
+                "trade_date": "2026-03-03",
+                "community_id": "C001",
+                "members": "AAA,BBB,CCC",
+            },
+            {
+                "timestamp": "2026-03-04T14:35:00Z",
+                "trade_date": "2026-03-04",
+                "community_id": "C002",
+                "members": "AAA,BBB,CCC",
+            },
+        ]
+    )
+
+    assigned = assign_theme_paths(
+        communities,
+        min_overlap=0.40,
+        max_gap=pd.Timedelta(minutes=30),
+        reset_on_trade_date_change=True,
+    )
+
+    assert assigned["theme_path_id"].nunique() == 2
+    assert list(assigned["event_type"]) == ["birth", "birth"]
+    assert assigned.loc[1, "matched_previous_theme_path_id"] == ""
+    assert assigned.loc[1, "age_bars"] == 1

@@ -14,8 +14,10 @@ from realtime_dashboard.alert_engine import AlertEngine, AlertLevel
 from realtime_dashboard.config import ScoringConfig
 from realtime_dashboard.feature_engine import FeatureConfig, RollingFeatureEngine
 from realtime_dashboard.scoring import CommunityScorer
+from realtime_dashboard.theme_state_manager import ThemeStateManager
 from realtime_dashboard.universe import build_symbol_universe
 from realtime_dashboard.scripts import run_realtime_scanner as scanner
+from realtime_dashboard.scripts import run_5m_realtime_scanner as scanner_5m
 from realtime_dashboard.scripts import build_historical_theme_state as historical_theme_state
 from realtime_dashboard.scripts import continuous_monitor
 from realtime_dashboard.scripts import push_alerts_to_github as publisher
@@ -213,6 +215,45 @@ def test_process_frequency_assigns_theme_ids_before_scoring():
     assert theme_state_manager.update_called is True
     assert not snapshots_df.empty
     assert alerts == []
+
+
+def test_5m_scanner_parse_args_defaults_git_publish_off(monkeypatch):
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["run_5m_realtime_scanner.py", "--universe-file", "universe.csv"],
+    )
+
+    args = scanner_5m.parse_args()
+
+    assert args.git_publish is False
+
+
+def test_theme_state_manager_update_scored_communities_handles_non_range_index(tmp_path):
+    manager = ThemeStateManager(state_dir=str(tmp_path / "theme_state"))
+    manager.write_event = lambda *args, **kwargs: None
+    manager.write_membership = lambda *args, **kwargs: None
+
+    communities_df = pd.DataFrame(
+        [
+            {
+                "community_id": "C001",
+                "members": "AAA,BBB,CCC",
+                "top_members": "AAA,BBB",
+                "radar_score": 0.9,
+            }
+        ],
+        index=[7],
+    )
+
+    updated = manager.update_scored_communities(
+        timestamp=datetime(2026, 6, 10, 14, 0, tzinfo=UTC),
+        frequency="5m",
+        communities_df=communities_df,
+        memberships_df=pd.DataFrame(),
+    )
+
+    assert updated.loc[7, "theme_path_id"].startswith("T_") or updated.loc[7, "theme_path_id"].startswith("T")
 
 
 def test_scoring_preserves_raw_member_stability_for_alerts():

@@ -165,3 +165,7 @@ def test_build_theme_candidates_can_use_overlap_small_confirmation():
     assert candidates["theme_path_id"].nunique() == 1
     assert list(candidates["age_bars"].tail(3)) == [2, 3, 4]
     assert bool(candidates.iloc[-1]["confirmed_on_15m"])
+    assert bool(candidates.iloc[-1]["confirmed_by_age_3x5m"])
+    assert not bool(candidates.iloc[-1]["confirmed_by_15m_graph"])
+    assert candidates.iloc[-1]["confirmation_source"] == "age_3x5m"
+    assert pd.Timestamp(candidates.iloc[-1]["confirmation_timestamp"]) == pd.Timestamp(candidates.iloc[-1]["signal_timestamp"])

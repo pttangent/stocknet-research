@@ -12,6 +12,15 @@ if str(ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(ROOT_DIR))
 
 from stocknet_alpha.backtest.backtest_signals import summarize_signal_backtest
+from stocknet_alpha.backtest.audit import (
+    HISTORICAL_AUDIT_LABELS,
+    all_audit_checks_pass,
+    evaluate_cost_realism,
+    evaluate_historical_logic,
+    evaluate_historical_robustness,
+    evaluate_historical_survivorship,
+    evaluate_temporal_causality,
+)
 from stocknet_alpha.backtest.historical_leadlag import (
     aggregate_evaluated_trades,
     build_self_audit_report,
@@ -136,12 +145,15 @@ def main() -> None:
     else:
         robustness_summary = {"baseline_metric": None, "same_sign_rate": None, "max_abs_deviation": None, "is_robust": False}
 
+    audit_checks = {
+        "lookahead_guard": evaluate_temporal_causality(all_evaluated),
+        "survivorship_bias": evaluate_historical_survivorship(dates, daily_df),
+        "robustness": evaluate_historical_robustness(robustness_summary),
+        "logic_explainability": evaluate_historical_logic(daily_df),
+        "cost_realism": evaluate_cost_realism(all_evaluated),
+    }
     metadata = {
-        "lookahead_guard": "PASS",
-        "survivorship_bias": "PASS",
-        "robustness": "PASS" if robustness_summary.get("is_robust") else "FAIL",
-        "logic_explainability": "PASS",
-        "cost_realism": "PASS",
+        "audit_checks": audit_checks,
         "notes": [
             "signals are generated only from same-day historical bars_5m and trade_flow_1m",
             "historical route scans all symbols present in raw daily partitions instead of a current survivor list",
@@ -157,7 +169,14 @@ def main() -> None:
     if not all_evaluated.empty:
         all_evaluated.to_parquet(output_dir / "evaluated_trades.parquet", index=False)
     (output_dir / "self_audit_report.md").write_text(audit_report, encoding="utf-8")
+    (output_dir / "audit_summary.json").write_text(
+        json.dumps({"audit_checks": audit_checks}, indent=2, ensure_ascii=False),
+        encoding="utf-8",
+    )
     (output_dir / "run_params.json").write_text(json.dumps(vars(args), indent=2, ensure_ascii=False), encoding="utf-8")
+    if not all_audit_checks_pass(audit_checks, required_keys=tuple(HISTORICAL_AUDIT_LABELS)):
+        failed = [key for key in HISTORICAL_AUDIT_LABELS if audit_checks[key]["status"] != "PASS"]
+        raise SystemExit(f"historical audit failed: {', '.join(failed)}")
     print(f"Wrote historical lead-lag results to {output_dir}")
 
 

@@ -27,13 +27,15 @@ def test_aggregate_evaluated_trades_rolls_up_multiple_days():
     assert round(three_minute["hit_rate"], 6) == round(2 / 3, 6)
 
 
-def test_build_self_audit_report_surfaces_five_checks():
+def test_build_self_audit_report_surfaces_computed_checks_and_evidence():
     metadata = {
-        "lookahead_guard": "PASS",
-        "survivorship_bias": "WARN",
-        "robustness": "FAIL",
-        "logic_explainability": "PASS",
-        "cost_realism": "PASS",
+        "audit_checks": {
+            "lookahead_guard": {"status": "PASS", "evidence": "decision timestamps precede execution timestamps"},
+            "survivorship_bias": {"status": "FAIL", "evidence": "universe provenance missing"},
+            "robustness": {"status": "FAIL", "evidence": "sign flips across variants"},
+            "logic_explainability": {"status": "PASS", "evidence": "rules are interpretable"},
+            "cost_realism": {"status": "PASS", "evidence": "positive slippage and fee assumptions present"},
+        },
         "notes": [
             "signals are generated from same-day bars_5m and trade_flow_1m only",
             "historical route uses all symbols present in raw daily partitions",
@@ -47,8 +49,9 @@ def test_build_self_audit_report_surfaces_five_checks():
 
     report = build_self_audit_report(metadata, summary)
 
-    assert "嚴查未來函數" in report
-    assert "規避倖存者偏差" in report
-    assert "檢驗參數魯棒性" in report
-    assert "還原真實交易成本" in report
+    assert "Lookahead guard" in report
+    assert "Survivorship bias" in report
+    assert "Robustness" in report
+    assert "Cost realism" in report
     assert "FAIL" in report
+    assert "universe provenance missing" in report

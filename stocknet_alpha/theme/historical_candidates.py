@@ -10,6 +10,7 @@ from stocknetwork.theme_persistence import assign_theme_paths
 
 
 THEME_CANDIDATE_COLUMNS = [
+    "candidate_id",
     "trade_date",
     "signal_timestamp",
     "theme_path_id",
@@ -17,7 +18,11 @@ THEME_CANDIDATE_COLUMNS = [
     "members",
     "member_count",
     "confirmed_on_15m",
+    "confirmed_by_age_3x5m",
+    "confirmed_by_15m_graph",
+    "confirmation_source",
     "confirmation_timestamp",
+    "confirmation_match_score",
     "radar_score_5m",
     "confirmation_score_5m",
     "coherence_5m",
@@ -214,8 +219,17 @@ def build_theme_candidates_from_market_data(
         min_overlap=theme_path_min_overlap,
         score_method=theme_path_score_method,
     )
-    candidates["confirmed_on_15m"] = candidates["age_bars"] >= 3
+    candidates["candidate_id"] = candidates.apply(_build_candidate_id, axis=1)
+    candidates["confirmed_by_age_3x5m"] = candidates["age_bars"] >= 3
+    candidates["confirmed_by_15m_graph"] = False
+    candidates["confirmed_on_15m"] = candidates["confirmed_by_age_3x5m"] | candidates["confirmed_by_15m_graph"]
+    candidates["confirmation_source"] = np.where(
+        candidates["confirmed_by_15m_graph"],
+        "15m_graph",
+        np.where(candidates["confirmed_by_age_3x5m"], "age_3x5m", ""),
+    )
     candidates["confirmation_timestamp"] = candidates["signal_timestamp"].where(candidates["confirmed_on_15m"], pd.NaT)
+    candidates["confirmation_match_score"] = candidates["match_score"].where(candidates["confirmed_on_15m"], pd.NA)
     for column in THEME_CANDIDATE_COLUMNS:
         if column not in candidates.columns:
             candidates[column] = pd.NA
@@ -305,3 +319,11 @@ def _average_pairwise_corr(corr: pd.DataFrame, members: list[str]) -> float:
                 if not np.isnan(value):
                     values.append(value)
     return float(np.mean(values)) if values else 0.0
+
+
+def _build_candidate_id(row: pd.Series) -> str:
+    trade_date = str(row.get("trade_date", "")).strip()
+    signal_timestamp = pd.to_datetime(row.get("signal_timestamp"), utc=True)
+    members = str(row.get("members", "")).strip()
+    ts_text = signal_timestamp.isoformat().replace("+00:00", "Z") if not pd.isna(signal_timestamp) else ""
+    return f"{trade_date}_{ts_text}_{members}"

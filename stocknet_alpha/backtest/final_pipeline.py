@@ -1,9 +1,20 @@
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
+from typing import Any
 
 import pandas as pd
 
+from stocknet_alpha.backtest.audit import (
+    FINAL_AUDIT_LABELS,
+    all_audit_checks_pass,
+    evaluate_cost_realism,
+    evaluate_final_parameter_robustness,
+    evaluate_logic_explainability,
+    evaluate_temporal_causality,
+    inherit_required_audit_check,
+    render_audit_checks,
+)
 from stocknet_alpha.backtest.walk_forward_strategy import run_walk_forward_strategy
 
 
@@ -74,49 +85,42 @@ def build_strategy_robustness_scan(
 
 
 def build_final_strategy_self_audit(
-    selection_summary: dict[str, float | int | None],
-    robustness_summary: dict[str, float | int | str | None],
+    selection_summary: Mapping[str, float | int | None],
+    robustness_summary: Mapping[str, float | int | str | None],
     split_summary: pd.DataFrame,
     strategy_trades: pd.DataFrame,
+    *,
+    audit_checks: Mapping[str, Mapping[str, str] | dict[str, str]],
 ) -> str:
-    lines = [
-        "# Walk-Forward Strategy Self-Audit",
-        "",
-        "## Five Checks",
-        "",
-        "- Lookahead guard: `PASS`",
-        "- Survivorship bias guard: `PASS`",
-        "- Parameter robustness: `PASS`",
-        "- Logic explainability: `PASS`",
-        "- Cost realism: `PASS`",
-        "",
-        "## Evidence",
-        "",
-        "- Causality: signals are formed from same-day historical `bars_5m` and `trade_flow_1m`, then evaluated with `decision_timestamp` -> `execution_timestamp` ordering.",
-        "- Survivorship: historical runs scan all symbols present in raw daily partitions rather than a current survivor universe.",
-        "- Costs: evaluated trades include `commission_bps=0.5`, `fees_bps=0.5`, `slippage_bps=1.5` per side.",
-        (
-            f"- OOS strategy result: `split_count={selection_summary.get('split_count')}`, "
-            f"`positive_test_splits={selection_summary.get('positive_test_splits')}`, "
-            f"`weighted_test_avg_net_return={_fmt_metric(selection_summary.get('weighted_test_avg_net_return'))}`."
-        ),
-        (
-            f"- Robustness scan: `same_sign_rate={_fmt_metric(robustness_summary.get('same_sign_rate'))}`, "
-            f"`min_weighted_test_avg_net_return={_fmt_metric(robustness_summary.get('min_weighted_test_avg_net_return'))}`, "
-            f"`max_weighted_test_avg_net_return={_fmt_metric(robustness_summary.get('max_weighted_test_avg_net_return'))}`."
-        ),
-        "- Logic: selected rules remain simple and interpretable: regular-session, high theme-score, walk-forward-selected holding horizon.",
-        "",
-        "## Split Summary",
-        "",
-        split_summary.to_string(index=False) if not split_summary.empty else "No split trades.",
-        "",
-        "## Strategy Trades",
-        "",
-        f"- Realized OOS trades: `{len(strategy_trades)}`",
-        f"- Confirmed OOS trades: `{int(strategy_trades['confirmed_on_15m'].fillna(False).sum()) if not strategy_trades.empty and 'confirmed_on_15m' in strategy_trades.columns else 0}`",
-        "",
-    ]
+    lines = ["# Walk-Forward Strategy Self-Audit", ""]
+    lines.extend(render_audit_checks(audit_checks, labels=FINAL_AUDIT_LABELS))
+    lines.extend(
+        [
+            "",
+            "## Evidence",
+            "",
+            (
+                f"- OOS strategy result: `split_count={selection_summary.get('split_count')}`, "
+                f"`positive_test_splits={selection_summary.get('positive_test_splits')}`, "
+                f"`weighted_test_avg_net_return={_fmt_metric(selection_summary.get('weighted_test_avg_net_return'))}`."
+            ),
+            (
+                f"- Robustness scan: `same_sign_rate={_fmt_metric(robustness_summary.get('same_sign_rate'))}`, "
+                f"`min_weighted_test_avg_net_return={_fmt_metric(robustness_summary.get('min_weighted_test_avg_net_return'))}`, "
+                f"`max_weighted_test_avg_net_return={_fmt_metric(robustness_summary.get('max_weighted_test_avg_net_return'))}`."
+            ),
+            "",
+            "## Split Summary",
+            "",
+            split_summary.to_string(index=False) if not split_summary.empty else "No split trades.",
+            "",
+            "## Strategy Trades",
+            "",
+            f"- Realized OOS trades: `{len(strategy_trades)}`",
+            f"- Confirmed OOS trades: `{int(strategy_trades['confirmed_on_15m'].fillna(False).sum()) if not strategy_trades.empty and 'confirmed_on_15m' in strategy_trades.columns else 0}`",
+            "",
+        ]
+    )
     return "\n".join(lines)
 
 
@@ -131,6 +135,7 @@ def run_final_leadlag_pipeline(
     leadlag_threshold: float = 0.50,
     robustness_min_train_counts: Sequence[int] = (180, 200, 220),
     robustness_leadlag_thresholds: Sequence[float] = (0.45, 0.50, 0.55),
+    audit_evidence: Mapping[str, Any] | None = None,
 ) -> dict[str, object]:
     selections, strategy_trades, split_summary, selection_summary, strategy_report = run_walk_forward_strategy(
         evaluated_trades,
@@ -150,11 +155,23 @@ def run_final_leadlag_pipeline(
         min_valid_count=min_valid_count,
         leadlag_thresholds=robustness_leadlag_thresholds,
     )
+    audit_checks = {
+        "lookahead_guard": evaluate_temporal_causality(strategy_trades),
+        "survivorship_bias": inherit_required_audit_check(audit_evidence, "survivorship_bias"),
+        "parameter_robustness": evaluate_final_parameter_robustness(robustness_summary),
+        "logic_explainability": evaluate_logic_explainability(selections, strategy_trades),
+        "cost_realism": evaluate_cost_realism(strategy_trades),
+    }
+    if not all_audit_checks_pass(audit_checks, required_keys=tuple(FINAL_AUDIT_LABELS)):
+        failed = [key for key in FINAL_AUDIT_LABELS if audit_checks[key]["status"] != "PASS"]
+        raise ValueError(f"audit failed for final pipeline: {', '.join(failed)}")
+
     self_audit_report = build_final_strategy_self_audit(
         selection_summary,
         robustness_summary,
         split_summary,
         strategy_trades,
+        audit_checks=audit_checks,
     )
     return {
         "selections": selections,
@@ -164,6 +181,7 @@ def run_final_leadlag_pipeline(
         "strategy_report": strategy_report,
         "robustness_scan": robustness_scan,
         "robustness_summary": robustness_summary,
+        "audit_checks": audit_checks,
         "self_audit_report": self_audit_report,
     }
 
