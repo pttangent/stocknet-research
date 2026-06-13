@@ -1,17 +1,435 @@
 {
-  "generated_at": "2026-06-09T14:12:31.278510+00:00",
-  "input_dir": "../data/archive_15m_from_1m",
-  "output_dir": "D:\\DEV\\stocknetwork\\StockNet\\realtime_dashboard\\artifacts\\theme_state",
+  "generated_at": "2026-06-10T22:34:28.309549+00:00",
+  "input_dir": "artifacts/parquet_15m",
+  "output_dir": "realtime_dashboard/artifacts/theme_state",
   "lookback_days": 5,
   "frequency": "15m",
   "stats": {
-    "timestamps_processed": 69,
-    "total_paths": 0,
-    "active_paths": 0,
-    "birth_count": 0,
-    "continuation_count": 0,
-    "revival_count": 0,
-    "weak_continuation_count": 0
+    "timestamps_processed": 131,
+    "total_paths": 4924,
+    "active_paths": 3965,
+    "birth_count": 3611,
+    "continuation_count": 9128,
+    "revival_count": 7,
+    "weak_continuation_count": 6248
   },
-  "top_themes": []
+  "top_themes": [
+    {
+      "theme_path_id": "T_20260610_68d887ea",
+      "state": "inactive",
+      "first_seen": "2026-06-10T13:30:00+00:00",
+      "last_seen": "2026-06-10T13:30:00+00:00",
+      "last_frequency": "5m",
+      "member_count": 39,
+      "core_members": [
+        "XOS",
+        "SMCI",
+        "IIPR",
+        "DNTH",
+        "CLOV"
+      ],
+      "peak_radar_score": 0.9781,
+      "age_events": 1
+    },
+    {
+      "theme_path_id": "T_20260601_5bc53b90",
+      "state": "active",
+      "first_seen": "2026-06-01T18:45:00+00:00",
+      "last_seen": "2026-06-01T19:30:00+00:00",
+      "last_frequency": "15m",
+      "member_count": 29,
+      "core_members": [
+        "FJET",
+        "CTS",
+        "HNI",
+        "CXW",
+        "ENVA",
+        "TKC",
+        "UAA",
+        "SHIM",
+        "ONC",
+        "NC"
+      ],
+      "peak_radar_score": 0.948,
+      "age_events": 4
+    },
+    {
+      "theme_path_id": "T_20260601_710691b0",
+      "state": "active",
+      "first_seen": "2026-06-01T17:15:00+00:00",
+      "last_seen": "2026-06-01T17:15:00+00:00",
+      "last_frequency": "15m",
+      "member_count": 4,
+      "core_members": [
+        "ASTC",
+        "UMAC",
+        "PLUG",
+        "RUM"
+      ],
+      "peak_radar_score": 0.933,
+      "age_events": 1
+    },
+    {
+      "theme_path_id": "T_20260604_6ac702e5",
+      "state": "active",
+      "first_seen": "2026-06-04T18:00:00+00:00",
+      "last_seen": "2026-06-05T19:30:00+00:00",
+      "last_frequency": "15m",
+      "member_count": 9,
+      "core_members": [
+        "SHIM",
+        "EEFT",
+        "PODC",
+        "TUSK",
+        "AVT",
+        "INDP",
+        "FXACU",
+        "G",
+        "AEXA",
+        "TDUP"
+      ],
+      "peak_radar_score": 0.9228,
+      "age_events": 32
+    },
+    {
+      "theme_path_id": "T_20260602_9cb1d47f",
+      "state": "active",
+      "first_seen": "2026-06-02T17:45:00+00:00",
+      "last_seen": "2026-06-02T19:30:00+00:00",
+      "last_frequency": "15m",
+      "member_count": 10,
+      "core_members": [
+        "BUR",
+        "ATEN",
+        "ACTG",
+        "FSLY",
+        "OVBC",
+        "TSBK",
+        "NWAX",
+        "XPOF",
+        "FMS",
+        "SZZL"
+      ],
+      "peak_radar_score": 0.9096,
+      "age_events": 6
+    },
+    {
+      "theme_path_id": "T_20260605_643b75c3",
+      "state": "active",
+      "first_seen": "2026-06-05T16:30:00+00:00",
+      "last_seen": "2026-06-05T19:30:00+00:00",
+      "last_frequency": "15m",
+      "member_count": 4,
+      "core_members": [
+        "SWIM",
+        "AVBH",
+        "SCI",
+        "ALL",
+        "FSUN",
+        "FCPT",
+        "GLIBA",
+        "AIN",
+        "OZK"
+      ],
+      "peak_radar_score": 0.8976,
+      "age_events": 4
+    },
+    {
+      "theme_path_id": "T_20260604_f12f21ac",
+      "state": "active",
+      "first_seen": "2026-06-04T13:30:00+00:00",
+      "last_seen": "2026-06-04T17:45:00+00:00",
+      "last_frequency": "15m",
+      "member_count": 8,
+      "core_members": [
+        "ASTC",
+        "OGC",
+        "SKYH",
+        "FXACU",
+        "NDLS",
+        "LWAY",
+        "RBC",
+        "ASUR",
+        "UNB",
+        "MPT"
+      ],
+      "peak_radar_score": 0.897,
+      "age_events": 9
+    },
+    {
+      "theme_path_id": "T_20260602_6d6d26c4",
+      "state": "active",
+      "first_seen": "2026-06-02T18:45:00+00:00",
+      "last_seen": "2026-06-02T19:00:00+00:00",
+      "last_frequency": "15m",
+      "member_count": 10,
+      "core_members": [
+        "RYZ",
+        "DIOD",
+        "SPT",
+        "INDV",
+        "ARRY",
+        "LWAY",
+        "BIOA",
+        "FVCB",
+        "PLCE"
+      ],
+      "peak_radar_score": 0.8966,
+      "age_events": 2
+    },
+    {
+      "theme_path_id": "T_20260602_8b2554ad",
+      "state": "active",
+      "first_seen": "2026-06-02T13:30:00+00:00",
+      "last_seen": "2026-06-03T18:45:00+00:00",
+      "last_frequency": "15m",
+      "member_count": 4,
+      "core_members": [
+        "STM",
+        "CORZ",
+        "SND",
+        "PLPC",
+        "CGEM",
+        "ISOU",
+        "AP",
+        "ATLX",
+        "HZO",
+        "MKSI"
+      ],
+      "peak_radar_score": 0.8942,
+      "age_events": 3
+    },
+    {
+      "theme_path_id": "T_20260601_c4c8e635",
+      "state": "active",
+      "first_seen": "2026-06-01T18:15:00+00:00",
+      "last_seen": "2026-06-01T19:15:00+00:00",
+      "last_frequency": "15m",
+      "member_count": 42,
+      "core_members": [
+        "VFS",
+        "HNVR",
+        "HTHT",
+        "ZGN",
+        "PRM",
+        "WNEB",
+        "CPSS",
+        "IMTX",
+        "AOMR",
+        "FA"
+      ],
+      "peak_radar_score": 0.8935,
+      "age_events": 2
+    },
+    {
+      "theme_path_id": "T_20260605_73d16c6d",
+      "state": "active",
+      "first_seen": "2026-06-05T14:30:00+00:00",
+      "last_seen": "2026-06-05T17:30:00+00:00",
+      "last_frequency": "15m",
+      "member_count": 5,
+      "core_members": [
+        "EGG",
+        "CORZ",
+        "CBNA",
+        "MBAV",
+        "HNVR",
+        "JMSB",
+        "VEL",
+        "ITRN",
+        "WBD",
+        "WRLD"
+      ],
+      "peak_radar_score": 0.8905,
+      "age_events": 13
+    },
+    {
+      "theme_path_id": "T_20260610_2fc05c09",
+      "state": "inactive",
+      "first_seen": "2026-06-10T13:30:00+00:00",
+      "last_seen": "2026-06-10T13:30:00+00:00",
+      "last_frequency": "5m",
+      "member_count": 7,
+      "core_members": [
+        "SIDU",
+        "PLUG",
+        "CAL",
+        "LAES",
+        "NRXP"
+      ],
+      "peak_radar_score": 0.8882,
+      "age_events": 1
+    },
+    {
+      "theme_path_id": "T_20260601_18d7c550",
+      "state": "active",
+      "first_seen": "2026-06-01T16:15:00+00:00",
+      "last_seen": "2026-06-04T17:00:00+00:00",
+      "last_frequency": "15m",
+      "member_count": 5,
+      "core_members": [
+        "OBK",
+        "WASH",
+        "CHCO",
+        "TCBK",
+        "CLBK",
+        "CTBI",
+        "FCF",
+        "MRBK",
+        "CCOI",
+        "CBAN"
+      ],
+      "peak_radar_score": 0.8855,
+      "age_events": 6
+    },
+    {
+      "theme_path_id": "T_20260601_c244360c",
+      "state": "active",
+      "first_seen": "2026-06-01T18:00:00+00:00",
+      "last_seen": "2026-06-05T19:45:00+00:00",
+      "last_frequency": "15m",
+      "member_count": 11,
+      "core_members": [
+        "CAC",
+        "AIP",
+        "AEG",
+        "STBA",
+        "SVV",
+        "SMFG",
+        "DB",
+        "ING",
+        "BCS",
+        "LMRI"
+      ],
+      "peak_radar_score": 0.8848,
+      "age_events": 68
+    },
+    {
+      "theme_path_id": "T_20260601_28e1226e",
+      "state": "active",
+      "first_seen": "2026-06-01T18:30:00+00:00",
+      "last_seen": "2026-06-05T19:30:00+00:00",
+      "last_frequency": "15m",
+      "member_count": 17,
+      "core_members": [
+        "LTBR",
+        "ELMT",
+        "DNN",
+        "UROY",
+        "NXE",
+        "LEU",
+        "ATI",
+        "CCJ",
+        "UUUU",
+        "DYNC"
+      ],
+      "peak_radar_score": 0.8837,
+      "age_events": 76
+    },
+    {
+      "theme_path_id": "T_20260603_06e1af64",
+      "state": "active",
+      "first_seen": "2026-06-03T13:30:00+00:00",
+      "last_seen": "2026-06-03T19:15:00+00:00",
+      "last_frequency": "15m",
+      "member_count": 57,
+      "core_members": [
+        "VTIX",
+        "SMJF",
+        "KEQU",
+        "ULBI",
+        "NRC",
+        "SCI",
+        "LQDT",
+        "AMCI",
+        "FOSL",
+        "SCM"
+      ],
+      "peak_radar_score": 0.8827,
+      "age_events": 13
+    },
+    {
+      "theme_path_id": "T_20260602_d61c1261",
+      "state": "active",
+      "first_seen": "2026-06-02T14:45:00+00:00",
+      "last_seen": "2026-06-02T17:30:00+00:00",
+      "last_frequency": "15m",
+      "member_count": 8,
+      "core_members": [
+        "WYY",
+        "VALU",
+        "NEWT",
+        "BWEN",
+        "GDOT",
+        "MITT",
+        "SVAC",
+        "EMBC",
+        "PKBK",
+        "EYE"
+      ],
+      "peak_radar_score": 0.8803,
+      "age_events": 6
+    },
+    {
+      "theme_path_id": "T_20260602_2f074bc8",
+      "state": "active",
+      "first_seen": "2026-06-02T18:30:00+00:00",
+      "last_seen": "2026-06-02T18:30:00+00:00",
+      "last_frequency": "15m",
+      "member_count": 13,
+      "core_members": [
+        "AKTS",
+        "STOK",
+        "AARD",
+        "UPWK",
+        "WMK"
+      ],
+      "peak_radar_score": 0.8743,
+      "age_events": 1
+    },
+    {
+      "theme_path_id": "T_20260610_ddd9a473",
+      "state": "active",
+      "first_seen": "2026-06-10T16:00:00+00:00",
+      "last_seen": "2026-06-05T13:45:00+00:00",
+      "last_frequency": "15m",
+      "member_count": 5,
+      "core_members": [
+        "VCTR",
+        "RLMD",
+        "ASMB",
+        "LENZ",
+        "J",
+        "QTRX",
+        "CART",
+        "NUVB",
+        "LYFT",
+        "PRCT"
+      ],
+      "peak_radar_score": 0.874,
+      "age_events": 6
+    },
+    {
+      "theme_path_id": "T_20260601_b2c9cacc",
+      "state": "active",
+      "first_seen": "2026-06-01T14:30:00+00:00",
+      "last_seen": "2026-06-01T16:15:00+00:00",
+      "last_frequency": "15m",
+      "member_count": 9,
+      "core_members": [
+        "GEO",
+        "DLX",
+        "KRNT",
+        "CBOE",
+        "ITT",
+        "SEPN",
+        "RFIL",
+        "ILPT",
+        "EOLS",
+        "STRO"
+      ],
+      "peak_radar_score": 0.8725,
+      "age_events": 5
+    }
+  ]
 }
