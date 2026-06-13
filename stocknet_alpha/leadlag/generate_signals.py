@@ -20,20 +20,18 @@ from stocknetwork.features import compute_leadlag_scores
 SIGNAL_COLUMNS = [
     "trade_date",
     "signal_timestamp",
+    "decision_timestamp",
+    "execution_timestamp",
     "theme_path_id",
     "community_id",
     "leader_symbol",
     "follower_symbol",
+    "signal_type",
     "lag_minutes",
     "leadlag_score",
     "best_lag_correlation",
     "confirmed_on_15m",
     "theme_score",
-    "forward_return_1m",
-    "forward_return_3m",
-    "forward_return_5m",
-    "forward_return_10m",
-    "forward_return_15m",
 ]
 
 
@@ -42,23 +40,21 @@ def generate_leadlag_signals(
     candidates: pd.DataFrame,
     lookback_minutes: int = 60,
     max_lag: int = 5,
-    forward_horizons: Iterable[int] = (1, 3, 5, 10, 15),
     top_followers: int = 3,
     max_members: int = 12,
 ) -> pd.DataFrame:
-    """Turn scanner themes into leader-follower 1m signals with forward returns."""
+    """Turn scanner themes into causal leader-follower 1m signals."""
 
     if bars_1m.empty or candidates.empty:
         return pd.DataFrame(columns=SIGNAL_COLUMNS)
 
     bars = bars_1m.copy()
     bars["timestamp"] = pd.to_datetime(bars["timestamp"], utc=True)
-    bars = bars.sort_values(["symbol", "timestamp"]).reset_index(drop=True)
+    bars = bars.sort_values(["symbol", "timestamp"]).drop_duplicates(subset=["symbol", "timestamp"], keep="last").reset_index(drop=True)
     bars["close"] = bars["close"].astype(float)
     bars["volume"] = bars["volume"].astype(float)
 
     signal_rows: list[dict[str, object]] = []
-    horizons = tuple(int(horizon) for horizon in forward_horizons)
 
     for _, candidate in candidates.iterrows():
         signal_timestamp = pd.Timestamp(candidate["signal_timestamp"])
@@ -74,6 +70,7 @@ def generate_leadlag_signals(
         ].copy()
         if history.empty:
             continue
+        history = history.sort_values(["symbol", "timestamp"]).drop_duplicates(subset=["symbol", "timestamp"], keep="last")
 
         top_members = (
             history.assign(dollar_volume=history["close"] * history["volume"])
@@ -108,22 +105,19 @@ def generate_leadlag_signals(
             row = {
                 "trade_date": signal_timestamp.date().isoformat(),
                 "signal_timestamp": signal_timestamp,
+                "decision_timestamp": signal_timestamp,
+                "execution_timestamp": signal_timestamp + pd.Timedelta(minutes=1),
                 "theme_path_id": candidate.get("theme_path_id", ""),
                 "community_id": candidate.get("community_id", ""),
                 "leader_symbol": leader,
                 "follower_symbol": str(follower),
+                "signal_type": "leadlag_return",
                 "lag_minutes": lag_minutes,
                 "leadlag_score": float(score),
                 "best_lag_correlation": float(best_corr),
                 "confirmed_on_15m": bool(candidate.get("confirmed_on_15m", False)),
                 "theme_score": float(candidate.get("theme_score", 0.0) or 0.0),
             }
-            for horizon in horizons:
-                row[f"forward_return_{horizon}m"] = _forward_return(
-                    bars[bars["symbol"] == str(follower)],
-                    signal_timestamp,
-                    horizon,
-                )
             signal_rows.append(row)
 
     if not signal_rows:
@@ -171,24 +165,6 @@ def _best_lag(leader_returns: pd.Series, follower_returns: pd.Series, max_lag: i
             best_corr = corr
             best_lag = lag
     return best_lag, best_corr
-
-
-def _forward_return(symbol_bars: pd.DataFrame, signal_timestamp: pd.Timestamp, horizon_minutes: int) -> float:
-    frame = symbol_bars.sort_values("timestamp")
-    entry_rows = frame[frame["timestamp"] >= signal_timestamp]
-    if entry_rows.empty:
-        return np.nan
-    entry_row = entry_rows.iloc[0]
-    exit_time = signal_timestamp + pd.Timedelta(minutes=horizon_minutes)
-    exit_rows = frame[frame["timestamp"] >= exit_time]
-    if exit_rows.empty:
-        return np.nan
-    exit_row = exit_rows.iloc[0]
-    entry_close = float(entry_row["close"])
-    exit_close = float(exit_row["close"])
-    if np.isclose(entry_close, 0.0):
-        return np.nan
-    return (exit_close / entry_close) - 1.0
 
 
 def parse_args() -> argparse.Namespace:

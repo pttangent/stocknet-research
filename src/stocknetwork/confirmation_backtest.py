@@ -8,6 +8,8 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
+from stocknetwork.theme_persistence import assign_theme_paths
+
 
 NY_TZ = "America/New_York"
 
@@ -398,39 +400,13 @@ def _add_lifecycle_rollups(frame: pd.DataFrame) -> pd.DataFrame:
 
 def _assign_theme_paths(frame: pd.DataFrame, jaccard_threshold: float = 0.20) -> pd.DataFrame:
     output = frame.copy().sort_values(["trade_date", "rotation_in_score"], ascending=[True, False]).reset_index(drop=True)
-    theme_path_ids: list[str] = []
-    next_path_number = 1
-    prev_rows: list[tuple[str, set[str]]] = []
-
-    for trade_date, day_slice in output.groupby("trade_date", sort=True):
-        current_assignments: list[tuple[int, str]] = []
-        used_prev: set[str] = set()
-        day_records = list(day_slice.iterrows())
-        for row_idx, row in day_records:
-            members = set(row["members_list"])
-            best_path = None
-            best_score = 0.0
-            for prev_path_id, prev_members in prev_rows:
-                if prev_path_id in used_prev:
-                    continue
-                score = _member_jaccard(members, prev_members)
-                if score > best_score:
-                    best_score = score
-                    best_path = prev_path_id
-            if best_path is not None and best_score >= jaccard_threshold:
-                path_id = best_path
-                used_prev.add(best_path)
-            else:
-                path_id = f"T{next_path_number:04d}"
-                next_path_number += 1
-            current_assignments.append((row_idx, path_id))
-        assignment_map = dict(current_assignments)
-        for row_idx in day_slice.index:
-            theme_path_ids.append(assignment_map[row_idx])
-        prev_rows = [(assignment_map[row_idx], set(output.loc[row_idx, "members_list"])) for row_idx in day_slice.index]
-
-    output["theme_path_id"] = theme_path_ids
-    return output
+    assigned = assign_theme_paths(
+        output,
+        member_col="members",
+        timestamp_col="timestamp",
+        min_overlap=jaccard_threshold,
+    )
+    return assigned.sort_values(["trade_date", "rotation_in_score"], ascending=[True, False]).reset_index(drop=True)
 
 
 def _member_jaccard(left: set[str], right: set[str]) -> float:

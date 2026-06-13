@@ -8,6 +8,7 @@ import pandas as pd
 from stocknet_alpha.backtest.backtest_signals import summarize_signal_backtest
 from stocknet_alpha.config import AlphaPaths, load_universe_symbols
 from stocknet_alpha.data.resample_bars import resample_ohlcv_bars, write_resampled_bars
+from stocknet_alpha.leadlag.evaluate_edges import evaluate_leadlag_signals
 from stocknet_alpha.leadlag.generate_signals import generate_leadlag_signals
 from stocknet_alpha.theme.build_theme_candidates import build_theme_candidates_from_state
 
@@ -183,17 +184,65 @@ def test_generate_leadlag_signals_and_backtest_summary(tmp_path: Path):
         candidates,
         lookback_minutes=10,
         max_lag=2,
-        forward_horizons=(1, 3),
         top_followers=2,
     )
 
     assert not signals.empty
     assert (signals["leadlag_score"] > 0).all()
     assert (signals["lag_minutes"] >= 1).all()
-    assert (signals["forward_return_1m"] > 0).all()
+    assert "forward_return_1m" not in signals.columns
+    assert "decision_timestamp" in signals.columns
+    assert "execution_timestamp" in signals.columns
+    assert (signals["execution_timestamp"] > signals["decision_timestamp"]).all()
 
-    summary = summarize_signal_backtest(signals, horizons=(1, 3))
+    evaluated = evaluate_leadlag_signals(
+        signals,
+        bars_1m,
+        horizons=(1, 3),
+    )
+    assert not evaluated.empty
+    assert set(evaluated["horizon_minutes"]) == {1, 3}
+    assert (evaluated["gross_return"] > 0).all()
+
+    summary = summarize_signal_backtest(evaluated, horizons=(1, 3))
 
     assert set(summary["horizon_minutes"]) == {1, 3}
     assert (summary["signal_count"] > 0).all()
-    assert "avg_return" in summary.columns
+    assert "avg_net_return" in summary.columns
+
+
+def test_generate_leadlag_signals_handles_duplicate_symbol_timestamps():
+    bars_1m = pd.DataFrame(
+        [
+            {"symbol": "AAA", "timestamp": "2026-06-09T14:00:00Z", "open": 10.0, "high": 10.1, "low": 10.0, "close": 10.1, "volume": 100.0, "source": "synthetic"},
+            {"symbol": "AAA", "timestamp": "2026-06-09T14:01:00Z", "open": 10.1, "high": 10.2, "low": 10.1, "close": 10.2, "volume": 100.0, "source": "synthetic"},
+            {"symbol": "AAA", "timestamp": "2026-06-09T14:01:00Z", "open": 10.1, "high": 10.2, "low": 10.1, "close": 10.2, "volume": 100.0, "source": "synthetic"},
+            {"symbol": "BBB", "timestamp": "2026-06-09T14:00:00Z", "open": 20.0, "high": 20.0, "low": 19.9, "close": 19.9, "volume": 100.0, "source": "synthetic"},
+            {"symbol": "BBB", "timestamp": "2026-06-09T14:01:00Z", "open": 19.9, "high": 20.1, "low": 19.9, "close": 20.1, "volume": 100.0, "source": "synthetic"},
+            {"symbol": "CCC", "timestamp": "2026-06-09T14:00:00Z", "open": 30.0, "high": 30.1, "low": 30.0, "close": 30.1, "volume": 100.0, "source": "synthetic"},
+            {"symbol": "CCC", "timestamp": "2026-06-09T14:01:00Z", "open": 30.1, "high": 30.2, "low": 30.1, "close": 30.2, "volume": 100.0, "source": "synthetic"},
+        ]
+    )
+    candidates = pd.DataFrame(
+        [
+            {
+                "signal_timestamp": pd.Timestamp("2026-06-09T14:01:00Z"),
+                "theme_path_id": "T001",
+                "community_id": "C001",
+                "members": "AAA,BBB,CCC",
+                "member_count": 3,
+                "confirmed_on_15m": False,
+                "theme_score": 0.5,
+            }
+        ]
+    )
+
+    signals = generate_leadlag_signals(
+        bars_1m,
+        candidates,
+        lookback_minutes=5,
+        max_lag=1,
+        top_followers=1,
+    )
+
+    assert isinstance(signals, pd.DataFrame)

@@ -23,11 +23,16 @@ class AlphaPaths:
         self.workspace_root = Path(self.workspace_root or self.repo_root.parent).expanduser().resolve()
         self.data_root = self.repo_root / "data"
         self.raw_1m_root = self.data_root / "raw_1m"
+        self.trade_flow_1m_root = self.data_root / "trade_flow_1m"
         self.bars_5m_root = self.data_root / "bars_5m"
         self.bars_15m_root = self.data_root / "bars_15m"
+        self.features_1m_root = self.data_root / "features_1m"
+        self.labels_1m_root = self.data_root / "labels_1m"
+        self.reference_root = self.data_root / "reference"
         self.theme_candidates_root = self.data_root / "theme_candidates"
         self.signals_root = self.data_root / "leadlag_signals"
         self.backtest_root = self.data_root / "alpha_backtests"
+        self.market_db_file = self.data_root / "stocknet_us.duckdb"
         self.scanner_state_dir = self.repo_root / "realtime_dashboard" / "artifacts" / "scanner_state"
         self.universe_csv = self.workspace_root / "P123_Screen_0_20260606.csv"
         self.exclude_symbol_csv = self.workspace_root / "P123_ETFCEF.csv"
@@ -42,6 +47,24 @@ class AlphaPaths:
             return self.bars_15m_root / f"date={trade_date}" / "bars_15m.parquet"
         raise ValueError(f"Unsupported interval: {interval}")
 
+    def trade_flow_1m_path(self, trade_date: str) -> Path:
+        return self.trade_flow_1m_root / f"date={trade_date}" / "trade_flow_1m.parquet"
+
+    def features_1m_path(self, trade_date: str) -> Path:
+        return self.features_1m_root / f"date={trade_date}" / "features_1m.parquet"
+
+    def labels_1m_path(self, trade_date: str) -> Path:
+        return self.labels_1m_root / f"date={trade_date}" / "labels_1m.parquet"
+
+    def splits_path(self) -> Path:
+        return self.reference_root / "splits.parquet"
+
+    def split_factors_path(self) -> Path:
+        return self.reference_root / "split_adjustment_factors.parquet"
+
+    def ingest_summary_path(self) -> Path:
+        return self.reference_root / "ingest_summary.parquet"
+
     def theme_candidates_path(self, trade_date: str) -> Path:
         return self.theme_candidates_root / f"date={trade_date}" / "theme_candidates.parquet"
 
@@ -53,6 +76,9 @@ class AlphaPaths:
 
     def backtest_report_path(self, trade_date: str) -> Path:
         return self.backtest_root / f"date={trade_date}" / "signal_backtest_report.md"
+
+    def walk_forward_splits_path(self) -> Path:
+        return self.backtest_root / "walk_forward_splits.parquet"
 
     def ensure_parent(self, target: Path) -> Path:
         target.parent.mkdir(parents=True, exist_ok=True)
@@ -102,4 +128,3 @@ def _read_portfolio123_csv(path: Path | str) -> pd.DataFrame:
     if "Ticker" not in frame.columns:
         raise ValueError(f"Ticker column not found in {source}")
     return frame
-
