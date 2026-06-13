@@ -20,6 +20,7 @@ from stocknetwork.features import compute_leadlag_scores
 SIGNAL_COLUMNS = [
     "trade_date",
     "signal_timestamp",
+    "feature_max_timestamp",
     "decision_timestamp",
     "execution_timestamp",
     "theme_path_id",
@@ -50,6 +51,10 @@ def generate_leadlag_signals(
 
     bars = bars_1m.copy()
     bars["timestamp"] = pd.to_datetime(bars["timestamp"], utc=True)
+    if "bar_end" in bars.columns:
+        bars["bar_end"] = pd.to_datetime(bars["bar_end"], utc=True)
+    else:
+        bars["bar_end"] = bars["timestamp"] + pd.Timedelta(minutes=1)
     bars = bars.sort_values(["symbol", "timestamp"]).drop_duplicates(subset=["symbol", "timestamp"], keep="last").reset_index(drop=True)
     bars["close"] = bars["close"].astype(float)
     bars["volume"] = bars["volume"].astype(float)
@@ -65,7 +70,7 @@ def generate_leadlag_signals(
         members = _coerce_members(candidate.get("members", ""))
         history = bars[
             (bars["symbol"].isin(members))
-            & (bars["timestamp"] <= signal_timestamp)
+            & (bars["bar_end"] <= signal_timestamp)
             & (bars["timestamp"] >= signal_timestamp - pd.Timedelta(minutes=lookback_minutes))
         ].copy()
         if history.empty:
@@ -102,9 +107,11 @@ def generate_leadlag_signals(
 
         for follower, score in followers.items():
             lag_minutes, best_corr = _best_lag(returns[leader], returns[str(follower)], max_lag=max_lag)
+            feature_max_timestamp = pd.Timestamp(history["bar_end"].max())
             row = {
                 "trade_date": signal_timestamp.date().isoformat(),
                 "signal_timestamp": signal_timestamp,
+                "feature_max_timestamp": feature_max_timestamp,
                 "decision_timestamp": signal_timestamp,
                 "execution_timestamp": signal_timestamp + pd.Timedelta(minutes=1),
                 "theme_path_id": candidate.get("theme_path_id", ""),

@@ -26,15 +26,15 @@ def test_aggregate_trade_flow_to_5m_aligns_to_bar_close():
 
 
 def test_build_theme_candidates_from_market_data_finds_persistent_cluster():
-    timestamps = pd.date_range("2026-06-09T14:05:00Z", periods=8, freq="5min")
+    timestamps = pd.date_range("2026-06-09T14:05:00Z", periods=10, freq="5min")
     rows: list[dict[str, object]] = []
     flow_rows: list[dict[str, object]] = []
 
     close_paths = {
-        "AAA": [10.00, 10.10, 10.20, 10.35, 10.50, 10.65, 10.80, 10.95],
-        "BBB": [20.00, 20.15, 20.30, 20.50, 20.65, 20.80, 20.95, 21.10],
-        "CCC": [30.00, 30.18, 30.35, 30.55, 30.72, 30.90, 31.06, 31.22],
-        "ZZZ": [15.00, 14.98, 15.01, 15.00, 14.99, 15.01, 15.00, 15.02],
+        "AAA": [10.00, 10.10, 10.20, 10.35, 10.50, 10.65, 10.80, 10.95, 11.10, 11.25],
+        "BBB": [20.00, 20.15, 20.30, 20.50, 20.65, 20.80, 20.95, 21.10, 21.25, 21.40],
+        "CCC": [30.00, 30.18, 30.35, 30.55, 30.72, 30.90, 31.06, 31.22, 31.38, 31.55],
+        "ZZZ": [15.00, 14.98, 15.01, 15.00, 14.99, 15.01, 15.00, 15.02, 15.01, 15.03],
     }
 
     for symbol, closes in close_paths.items():
@@ -84,6 +84,7 @@ def test_build_theme_candidates_from_market_data_finds_persistent_cluster():
         top_symbols=4,
         min_members=3,
         min_theme_score=0.0,
+        min_pair_corr=-1.0,
     )
 
     assert not candidates.empty
@@ -92,6 +93,9 @@ def test_build_theme_candidates_from_market_data_finds_persistent_cluster():
     assert candidates["theme_path_id"].nunique() >= 1
     assert candidates["theme_path_id"].iloc[-1] == candidates["theme_path_id"].iloc[-2]
     assert (candidates["signal_timestamp"].diff().dropna() >= pd.Timedelta(minutes=0)).all()
+    assert bool(candidates["confirmed_by_15m_graph"].any())
+    confirmed = candidates.loc[candidates["confirmed_by_15m_graph"]].iloc[-1]
+    assert confirmed["confirmation_source"] == "15m_graph"
 
 
 def test_build_theme_candidates_can_use_overlap_small_confirmation():

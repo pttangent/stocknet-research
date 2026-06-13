@@ -15,11 +15,15 @@ from stocknet_alpha.backtest.backtest_signals import summarize_signal_backtest
 from stocknet_alpha.backtest.audit import (
     HISTORICAL_AUDIT_LABELS,
     all_audit_checks_pass,
+    describe_input_file,
     evaluate_cost_realism,
     evaluate_historical_logic,
     evaluate_historical_robustness,
     evaluate_historical_survivorship,
     evaluate_temporal_causality,
+    read_git_provenance,
+    summarize_audit_status,
+    utc_now_iso_z,
 )
 from stocknet_alpha.backtest.historical_leadlag import (
     aggregate_evaluated_trades,
@@ -32,6 +36,7 @@ from stocknet_alpha.leadlag.evaluate_edges import evaluate_leadlag_signals
 from stocknet_alpha.leadlag.generate_signals import generate_leadlag_signals
 from stocknet_alpha.theme.build_historical_theme_candidates import load_daily_market_inputs
 from stocknet_alpha.theme.historical_candidates import build_theme_candidates_from_market_data
+from stocknetwork.run_metadata import create_run_context
 
 
 def parse_args() -> argparse.Namespace:
@@ -53,13 +58,18 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--fees-bps", type=float, default=0.5)
     parser.add_argument("--slippage-bps", type=float, default=1.5)
     parser.add_argument("--output-dir", default="", help="Optional explicit output directory.")
+    parser.add_argument("--run-id", default="", help="Optional explicit run identifier for artifact provenance.")
     return parser.parse_args()
 
 
 def main() -> None:
     args = parse_args()
     paths = AlphaPaths()
-    dates = discover_trade_dates(paths.trade_flow_1m_root, start_date=args.start_date, end_date=args.end_date)
+    dates = discover_trade_dates(
+        [paths.raw_1m_root, paths.bars_5m_root, paths.trade_flow_1m_root],
+        start_date=args.start_date,
+        end_date=args.end_date,
+    )
     if not dates:
         raise SystemExit("No trade dates found in the requested range.")
 
@@ -69,10 +79,22 @@ def main() -> None:
         else paths.backtest_root / f"historical_run_{args.start_date}_{args.end_date}"
     )
     output_dir.mkdir(parents=True, exist_ok=True)
+    run_context = create_run_context(
+        "run_historical_leadlag_backtest",
+        output_dir,
+        args=args,
+        inputs={
+            "raw_1m_root": paths.raw_1m_root,
+            "bars_5m_root": paths.bars_5m_root,
+            "trade_flow_1m_root": paths.trade_flow_1m_root,
+        },
+        run_id=args.run_id or None,
+    )
+    run_context.write_initial_metadata()
 
     daily_rows: list[dict[str, object]] = []
     evaluated_frames: list[pd.DataFrame] = []
-
+    processed_dates: list[str] = []
     for trade_date in dates:
         try:
             bars_5m, flow_1m = load_daily_market_inputs(paths, trade_date)
@@ -125,6 +147,7 @@ def main() -> None:
         )
         if not evaluated.empty:
             evaluated_frames.append(evaluated)
+        processed_dates.append(trade_date)
 
     daily_df = pd.DataFrame(daily_rows)
     all_evaluated = pd.concat(evaluated_frames, ignore_index=True) if evaluated_frames else pd.DataFrame()
@@ -174,9 +197,64 @@ def main() -> None:
         encoding="utf-8",
     )
     (output_dir / "run_params.json").write_text(json.dumps(vars(args), indent=2, ensure_ascii=False), encoding="utf-8")
+    manifest_payload = {
+        "run_id": run_context.run_id,
+        "generated_at": utc_now_iso_z(),
+        "artifact_schema_version": "leadlag_historical_v2",
+        "audit_status": summarize_audit_status(audit_checks, required_keys=tuple(HISTORICAL_AUDIT_LABELS)),
+        "requested_date_range": {"start_date": args.start_date, "end_date": args.end_date},
+        "processed_dates": processed_dates,
+        "input_files": [
+            *[
+                describe_input_file(path)
+                for trade_date in processed_dates
+                for path in [paths.raw_1m_path(trade_date), paths.bars_path(trade_date, "5m")]
+                if path.exists()
+            ],
+            *[
+                describe_input_file(paths.trade_flow_1m_path(trade_date))
+                for trade_date in processed_dates
+                if paths.trade_flow_1m_path(trade_date).exists()
+            ],
+        ],
+        "artifact_files": [
+            describe_input_file(output_dir / "run_params.json"),
+            describe_input_file(output_dir / "audit_summary.json"),
+            *( [describe_input_file(output_dir / "evaluated_trades.parquet")] if (output_dir / "evaluated_trades.parquet").exists() else [] ),
+        ],
+        "git": read_git_provenance(ROOT_DIR),
+    }
+    (output_dir / "historical_pipeline_manifest.json").write_text(
+        json.dumps(manifest_payload, indent=2, ensure_ascii=False),
+        encoding="utf-8",
+    )
+    run_context.write_artifacts(
+        {
+            "daily_backtest_results_csv": output_dir / "daily_backtest_results.csv",
+            "aggregate_backtest_summary_csv": output_dir / "aggregate_backtest_summary.csv",
+            "evaluated_trades_parquet": output_dir / "evaluated_trades.parquet" if (output_dir / "evaluated_trades.parquet").exists() else "",
+            "self_audit_report_md": output_dir / "self_audit_report.md",
+            "historical_pipeline_manifest_json": output_dir / "historical_pipeline_manifest.json",
+        }
+    )
     if not all_audit_checks_pass(audit_checks, required_keys=tuple(HISTORICAL_AUDIT_LABELS)):
         failed = [key for key in HISTORICAL_AUDIT_LABELS if audit_checks[key]["status"] != "PASS"]
+        run_context.write_summary(
+            {
+                "status": "failed",
+                "processed_dates": len(processed_dates),
+                "audit_status": manifest_payload["audit_status"],
+                "failed_checks": failed,
+            }
+        )
         raise SystemExit(f"historical audit failed: {', '.join(failed)}")
+    run_context.write_summary(
+        {
+            "status": "completed",
+            "processed_dates": len(processed_dates),
+            "audit_status": manifest_payload["audit_status"],
+        }
+    )
     print(f"Wrote historical lead-lag results to {output_dir}")
 
 

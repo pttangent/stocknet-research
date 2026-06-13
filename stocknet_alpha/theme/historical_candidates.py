@@ -36,6 +36,13 @@ THEME_CANDIDATE_COLUMNS = [
 
 
 def aggregate_trade_flow_to_5m(trade_flow_1m: pd.DataFrame) -> pd.DataFrame:
+    return aggregate_trade_flow_to_interval(trade_flow_1m, interval_minutes=5)
+
+
+def aggregate_trade_flow_to_interval(
+    trade_flow_1m: pd.DataFrame,
+    interval_minutes: int,
+) -> pd.DataFrame:
     if trade_flow_1m.empty:
         return pd.DataFrame(
             columns=[
@@ -55,7 +62,7 @@ def aggregate_trade_flow_to_5m(trade_flow_1m: pd.DataFrame) -> pd.DataFrame:
     frame = trade_flow_1m.copy()
     frame["minute"] = pd.to_datetime(frame["minute"], utc=True)
     frame["symbol"] = frame["ticker"].astype(str).str.upper()
-    frame["timestamp"] = frame["minute"].dt.floor("5min") + pd.Timedelta(minutes=5)
+    frame["timestamp"] = frame["minute"].dt.floor(f"{int(interval_minutes)}min") + pd.Timedelta(minutes=int(interval_minutes))
     for column in [
         "imbalance_proxy",
         "dollar_volume",
@@ -114,7 +121,7 @@ def build_theme_candidates_from_market_data(
     bars["dollar_volume_5m"] = bars["close"].fillna(0.0) * bars["volume"].fillna(0.0)
     bars = bars.sort_values(["symbol", "timestamp"]).reset_index(drop=True)
 
-    flow_5m = aggregate_trade_flow_to_5m(trade_flow_1m)
+    flow_5m = aggregate_trade_flow_to_interval(trade_flow_1m, interval_minutes=5)
     merged = bars.merge(flow_5m, on=["symbol", "timestamp"], how="left", suffixes=("", "_flow"))
     for column in [
         "imbalance_proxy",
@@ -135,82 +142,20 @@ def build_theme_candidates_from_market_data(
     if merged.empty:
         return pd.DataFrame(columns=THEME_CANDIDATE_COLUMNS)
 
-    merged = _add_causal_features(merged)
-    candidate_rows: list[dict[str, object]] = []
+    candidates = _build_candidate_frame(
+        merged,
+        trade_date=trade_date,
+        interval_minutes=5,
+        lookback_bars=lookback_bars,
+        top_symbols=top_symbols,
+        min_members=min_members,
+        min_theme_score=min_theme_score,
+        min_pair_corr=min_pair_corr,
+        max_members_per_candidate=max_members_per_candidate,
+    )
 
-    for timestamp, current_slice in merged.groupby("timestamp", sort=True):
-        eligible = current_slice.dropna(subset=["ret_5m_past"]).copy()
-        if eligible.empty:
-            continue
-        liquid_pool_size = max(top_symbols * 5, top_symbols)
-        eligible = (
-            eligible.sort_values(["liquidity_score", "symbol"], ascending=[False, True])
-            .head(liquid_pool_size)
-            .sort_values(["seed_score", "liquidity_score", "symbol"], ascending=[False, False, True])
-            .head(top_symbols)
-            .copy()
-        )
-        if len(eligible) < min_members:
-            continue
-
-        history = merged[
-            (merged["timestamp"] <= timestamp)
-            & (merged["timestamp"] >= timestamp - pd.Timedelta(minutes=5 * max(lookback_bars - 1, 0)))
-            & (merged["symbol"].isin(eligible["symbol"]))
-        ].copy()
-        if history.empty:
-            continue
-        pivot = history.pivot(index="timestamp", columns="symbol", values="ret_5m_past").sort_index()
-        if len(pivot) < max(lookback_bars, 3):
-            continue
-        pivot = pivot.tail(lookback_bars)
-        corr = pivot.corr(min_periods=max(3, lookback_bars // 2)).fillna(0.0)
-
-        graph = _build_similarity_graph(eligible["symbol"].tolist(), corr, min_pair_corr=min_pair_corr)
-        communities = [sorted(component) for component in _connected_components(graph) if len(component) >= min_members]
-        if not communities:
-            continue
-
-        for community_id, members in enumerate(sorted(communities, key=len, reverse=True), start=1):
-            if len(members) > max_members_per_candidate:
-                ranked_members = (
-                    eligible[eligible["symbol"].isin(members)]
-                    .sort_values(["seed_score", "liquidity_score", "symbol"], ascending=[False, False, True])["symbol"]
-                    .head(max_members_per_candidate)
-                    .tolist()
-                )
-                members = sorted(ranked_members)
-            member_slice = eligible[eligible["symbol"].isin(members)].copy()
-            coherence = _average_pairwise_corr(corr, members)
-            breadth = float((member_slice["ret_5m_past"] > 0).mean())
-            relative_return = float(member_slice["ret_5m_past"].mean())
-            volume_expansion = float(member_slice["volume_z_12"].mean())
-            radar_score = float(member_slice["seed_score"].mean())
-            confirmation_score = 0.6 * coherence + 0.4 * breadth
-            theme_score = 0.4 * radar_score + 0.3 * confirmation_score + 0.3 * max(relative_return, 0.0)
-            if theme_score < min_theme_score:
-                continue
-            candidate_rows.append(
-                {
-                    "trade_date": str(trade_date),
-                    "signal_timestamp": timestamp,
-                    "community_id": f"C{community_id:03d}",
-                    "members": ",".join(members),
-                    "member_count": len(members),
-                    "radar_score_5m": radar_score,
-                    "confirmation_score_5m": confirmation_score,
-                    "coherence_5m": coherence,
-                    "breadth_5m": breadth,
-                    "relative_return_5m": relative_return,
-                    "volume_expansion_5m": volume_expansion,
-                    "theme_score": theme_score,
-                }
-            )
-
-    if not candidate_rows:
+    if candidates.empty:
         return pd.DataFrame(columns=THEME_CANDIDATE_COLUMNS)
-
-    candidates = pd.DataFrame(candidate_rows)
     candidates = candidates.sort_values(["signal_timestamp", "theme_score"], ascending=[True, False]).reset_index(drop=True)
     candidates = assign_theme_paths(
         candidates,
@@ -219,17 +164,42 @@ def build_theme_candidates_from_market_data(
         min_overlap=theme_path_min_overlap,
         score_method=theme_path_score_method,
     )
+    fifteen_minute_candidates = _build_15m_confirmation_candidates(
+        bars_5m,
+        trade_flow_1m,
+        trade_date=trade_date,
+        lookback_bars=lookback_bars,
+        top_symbols=top_symbols,
+        min_members=min_members,
+        min_theme_score=min_theme_score,
+        min_pair_corr=min_pair_corr,
+        max_members_per_candidate=max_members_per_candidate,
+    )
     candidates["candidate_id"] = candidates.apply(_build_candidate_id, axis=1)
     candidates["confirmed_by_age_3x5m"] = candidates["age_bars"] >= 3
-    candidates["confirmed_by_15m_graph"] = False
+    candidates = _apply_15m_graph_confirmation(
+        candidates,
+        fifteen_minute_candidates,
+        min_overlap=theme_path_min_overlap,
+        score_method=theme_path_score_method,
+    )
     candidates["confirmed_on_15m"] = candidates["confirmed_by_age_3x5m"] | candidates["confirmed_by_15m_graph"]
     candidates["confirmation_source"] = np.where(
         candidates["confirmed_by_15m_graph"],
         "15m_graph",
         np.where(candidates["confirmed_by_age_3x5m"], "age_3x5m", ""),
     )
-    candidates["confirmation_timestamp"] = candidates["signal_timestamp"].where(candidates["confirmed_on_15m"], pd.NaT)
-    candidates["confirmation_match_score"] = candidates["match_score"].where(candidates["confirmed_on_15m"], pd.NA)
+    candidates["confirmation_timestamp"] = np.where(
+        candidates["confirmed_by_15m_graph"],
+        candidates["confirmation_timestamp"],
+        candidates["signal_timestamp"].where(candidates["confirmed_by_age_3x5m"], pd.NaT),
+    )
+    candidates["confirmation_timestamp"] = pd.to_datetime(candidates["confirmation_timestamp"], utc=True, errors="coerce")
+    candidates["confirmation_match_score"] = np.where(
+        candidates["confirmed_by_15m_graph"],
+        candidates["confirmation_match_score"],
+        candidates["match_score"].where(candidates["confirmed_by_age_3x5m"], pd.NA),
+    )
     for column in THEME_CANDIDATE_COLUMNS:
         if column not in candidates.columns:
             candidates[column] = pd.NA
@@ -282,6 +252,36 @@ def _cross_sectional_zscore(series: pd.Series) -> pd.Series:
     return (series - float(series.mean())) / std
 
 
+def _split_members(value: object) -> set[str]:
+    if value is None or (isinstance(value, float) and pd.isna(value)):
+        return set()
+    if isinstance(value, (list, tuple, set)):
+        return {str(item).strip().upper() for item in value if str(item).strip()}
+    return {item.strip().upper() for item in str(value).split(",") if item.strip()}
+
+
+def _jaccard(left: set[str], right: set[str]) -> float:
+    if not left or not right:
+        return 0.0
+    union = left | right
+    return len(left & right) / len(union) if union else 0.0
+
+
+def _overlap_small(left: set[str], right: set[str]) -> float:
+    if not left or not right:
+        return 0.0
+    return len(left & right) / min(len(left), len(right))
+
+
+def _match_score(left: set[str], right: set[str], *, score_method: str) -> float:
+    method = str(score_method).strip().lower()
+    if method == "jaccard":
+        return _jaccard(left, right)
+    if method == "overlap_small":
+        return _overlap_small(left, right)
+    raise ValueError(f"Unsupported score_method: {score_method}")
+
+
 def _build_similarity_graph(symbols: list[str], corr: pd.DataFrame, *, min_pair_corr: float) -> dict[str, set[str]]:
     graph = {symbol: set() for symbol in symbols}
     for idx, left in enumerate(symbols):
@@ -327,3 +327,203 @@ def _build_candidate_id(row: pd.Series) -> str:
     members = str(row.get("members", "")).strip()
     ts_text = signal_timestamp.isoformat().replace("+00:00", "Z") if not pd.isna(signal_timestamp) else ""
     return f"{trade_date}_{ts_text}_{members}"
+
+
+def _build_candidate_frame(
+    merged: pd.DataFrame,
+    *,
+    trade_date: str,
+    interval_minutes: int,
+    lookback_bars: int,
+    top_symbols: int,
+    min_members: int,
+    min_theme_score: float,
+    min_pair_corr: float,
+    max_members_per_candidate: int,
+) -> pd.DataFrame:
+    merged = _add_causal_features(merged)
+    candidate_rows: list[dict[str, object]] = []
+
+    for timestamp, current_slice in merged.groupby("timestamp", sort=True):
+        eligible = current_slice.dropna(subset=["ret_5m_past"]).copy()
+        if eligible.empty:
+            continue
+        liquid_pool_size = max(top_symbols * 5, top_symbols)
+        eligible = (
+            eligible.sort_values(["liquidity_score", "symbol"], ascending=[False, True])
+            .head(liquid_pool_size)
+            .sort_values(["seed_score", "liquidity_score", "symbol"], ascending=[False, False, True])
+            .head(top_symbols)
+            .copy()
+        )
+        if len(eligible) < min_members:
+            continue
+
+        history = merged[
+            (merged["timestamp"] <= timestamp)
+            & (merged["timestamp"] >= timestamp - pd.Timedelta(minutes=interval_minutes * max(lookback_bars - 1, 0)))
+            & (merged["symbol"].isin(eligible["symbol"]))
+        ].copy()
+        if history.empty:
+            continue
+        pivot = history.pivot(index="timestamp", columns="symbol", values="ret_5m_past").sort_index()
+        if len(pivot) < max(lookback_bars, 3):
+            continue
+        pivot = pivot.tail(lookback_bars)
+        corr = pivot.corr(min_periods=max(3, lookback_bars // 2)).fillna(0.0)
+
+        graph = _build_similarity_graph(eligible["symbol"].tolist(), corr, min_pair_corr=min_pair_corr)
+        communities = [sorted(component) for component in _connected_components(graph) if len(component) >= min_members]
+        if not communities:
+            continue
+
+        for community_id, members in enumerate(sorted(communities, key=len, reverse=True), start=1):
+            if len(members) > max_members_per_candidate:
+                ranked_members = (
+                    eligible[eligible["symbol"].isin(members)]
+                    .sort_values(["seed_score", "liquidity_score", "symbol"], ascending=[False, False, True])["symbol"]
+                    .head(max_members_per_candidate)
+                    .tolist()
+                )
+                members = sorted(ranked_members)
+            member_slice = eligible[eligible["symbol"].isin(members)].copy()
+            coherence = _average_pairwise_corr(corr, members)
+            breadth = float((member_slice["ret_5m_past"] > 0).mean())
+            relative_return = float(member_slice["ret_5m_past"].mean())
+            volume_expansion = float(member_slice["volume_z_12"].mean())
+            radar_score = float(member_slice["seed_score"].mean())
+            confirmation_score = 0.6 * coherence + 0.4 * breadth
+            theme_score = 0.4 * radar_score + 0.3 * confirmation_score + 0.3 * max(relative_return, 0.0)
+            if theme_score < min_theme_score:
+                continue
+            candidate_rows.append(
+                {
+                    "trade_date": str(trade_date),
+                    "signal_timestamp": timestamp,
+                    "community_id": f"C{community_id:03d}",
+                    "members": ",".join(members),
+                    "member_count": len(members),
+                    "radar_score_5m": radar_score,
+                    "confirmation_score_5m": confirmation_score,
+                    "coherence_5m": coherence,
+                    "breadth_5m": breadth,
+                    "relative_return_5m": relative_return,
+                    "volume_expansion_5m": volume_expansion,
+                    "theme_score": theme_score,
+                }
+            )
+    return pd.DataFrame(candidate_rows)
+
+
+def _build_15m_confirmation_candidates(
+    bars_5m: pd.DataFrame,
+    trade_flow_1m: pd.DataFrame,
+    *,
+    trade_date: str,
+    lookback_bars: int,
+    top_symbols: int,
+    min_members: int,
+    min_theme_score: float,
+    min_pair_corr: float,
+    max_members_per_candidate: int,
+) -> pd.DataFrame:
+    bars_15m = _resample_bars_from_5m(bars_5m, target_interval_minutes=15)
+    if bars_15m.empty:
+        return pd.DataFrame(columns=["signal_timestamp", "members", "theme_score"])
+    bars_15m["dollar_volume_5m"] = pd.to_numeric(bars_15m["close"], errors="coerce").fillna(0.0) * pd.to_numeric(
+        bars_15m["volume"], errors="coerce"
+    ).fillna(0.0)
+    flow_15m = aggregate_trade_flow_to_interval(trade_flow_1m, interval_minutes=15)
+    merged = bars_15m.merge(flow_15m, on=["symbol", "timestamp"], how="left", suffixes=("", "_flow"))
+    for column in [
+        "imbalance_proxy",
+        "dollar_volume",
+        "buy_vol_proxy",
+        "sell_vol_proxy",
+        "large_trade_dollar_volume",
+        "off_exchange_volume",
+        "trade_count",
+        "volume_flow",
+    ]:
+        if column not in merged.columns:
+            merged[column] = 0.0
+        merged[column] = pd.to_numeric(merged[column], errors="coerce").fillna(0.0)
+    merged["trade_date"] = pd.to_datetime(merged["timestamp"], utc=True).dt.date.astype(str)
+    merged = merged[merged["trade_date"] == str(trade_date)].copy()
+    if merged.empty:
+        return pd.DataFrame(columns=["signal_timestamp", "members", "theme_score"])
+    return _build_candidate_frame(
+        merged,
+        trade_date=trade_date,
+        interval_minutes=15,
+        lookback_bars=3,
+        top_symbols=top_symbols,
+        min_members=min_members,
+        min_theme_score=min_theme_score,
+        min_pair_corr=min_pair_corr,
+        max_members_per_candidate=max_members_per_candidate,
+    )
+
+
+def _apply_15m_graph_confirmation(
+    candidates: pd.DataFrame,
+    confirmation_candidates: pd.DataFrame,
+    *,
+    min_overlap: float,
+    score_method: str,
+) -> pd.DataFrame:
+    output = candidates.copy()
+    output["confirmed_by_15m_graph"] = False
+    output["confirmation_timestamp"] = pd.Series(pd.NaT, index=output.index, dtype="datetime64[ns, UTC]")
+    output["confirmation_match_score"] = pd.NA
+    if confirmation_candidates.empty:
+        return output
+
+    conf = confirmation_candidates.copy()
+    conf["signal_timestamp"] = pd.to_datetime(conf["signal_timestamp"], utc=True)
+    conf["_member_set"] = conf["members"].map(_split_members)
+    output["signal_timestamp"] = pd.to_datetime(output["signal_timestamp"], utc=True)
+    for idx, row in output.iterrows():
+        member_set = _split_members(row.get("members"))
+        eligible = conf[conf["signal_timestamp"] <= row["signal_timestamp"]]
+        best_score = 0.0
+        best_timestamp = pd.NaT
+        for _, conf_row in eligible.iterrows():
+            score = _match_score(member_set, conf_row["_member_set"], score_method=score_method)
+            if score > best_score:
+                best_score = score
+                best_timestamp = conf_row["signal_timestamp"]
+        if best_score >= min_overlap:
+            output.at[idx, "confirmed_by_15m_graph"] = True
+            output.at[idx, "confirmation_timestamp"] = best_timestamp
+            output.at[idx, "confirmation_match_score"] = float(best_score)
+    return output
+
+
+def _resample_bars_from_5m(bars_5m: pd.DataFrame, *, target_interval_minutes: int) -> pd.DataFrame:
+    if bars_5m.empty:
+        return bars_5m.copy()
+    frame = bars_5m.copy()
+    frame["timestamp"] = pd.to_datetime(frame["timestamp"], utc=True)
+    frame["symbol"] = frame["symbol"].astype(str).str.upper()
+    frame["bucket_end"] = (frame["timestamp"] - pd.Timedelta(minutes=5)).dt.floor(f"{int(target_interval_minutes)}min") + pd.Timedelta(minutes=int(target_interval_minutes))
+    rows: list[dict[str, object]] = []
+    for (symbol, bucket_end), group in frame.groupby(["symbol", "bucket_end"], sort=True):
+        group = group.sort_values("timestamp")
+        row = {
+            "timestamp": bucket_end,
+            "symbol": symbol,
+            "open": pd.to_numeric(group["open"], errors="coerce").iloc[0],
+            "high": pd.to_numeric(group["high"], errors="coerce").max(),
+            "low": pd.to_numeric(group["low"], errors="coerce").min(),
+            "close": pd.to_numeric(group["close"], errors="coerce").iloc[-1],
+            "volume": pd.to_numeric(group["volume"], errors="coerce").fillna(0.0).sum(),
+            "source": group["source"].iloc[-1] if "source" in group.columns else "resampled_15m",
+        }
+        if "vwap" in group.columns:
+            weights = pd.to_numeric(group["volume"], errors="coerce").fillna(0.0)
+            vwap_values = pd.to_numeric(group["vwap"], errors="coerce")
+            total_weight = float(weights.sum())
+            row["vwap"] = float((vwap_values.fillna(0.0) * weights).sum() / total_weight) if total_weight > 0 else np.nan
+        rows.append(row)
+    return pd.DataFrame(rows).sort_values(["timestamp", "symbol"]).reset_index(drop=True)

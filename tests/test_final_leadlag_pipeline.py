@@ -1,5 +1,10 @@
 from __future__ import annotations
 
+import json
+import subprocess
+import sys
+from pathlib import Path
+
 import pandas as pd
 import pytest
 
@@ -265,3 +270,63 @@ def test_build_strategy_robustness_scan_handles_none_baseline_weighted_return(mo
     assert len(scan) == 9
     assert summary["baseline_variant"] == "min_train_2_leadlag_0.50"
     assert summary["baseline_weighted_test_avg_net_return"] is None
+
+
+def test_final_pipeline_cli_manifest_includes_run_and_input_provenance(tmp_path: Path):
+    repo_root = Path(__file__).resolve().parents[1]
+    input_dir = tmp_path / "input"
+    output_dir = tmp_path / "output"
+    input_dir.mkdir()
+    output_dir.mkdir()
+
+    evaluated_path = input_dir / "evaluated_trades.parquet"
+    pd.concat([_sample_evaluated()] * 25, ignore_index=True).to_parquet(evaluated_path, index=False)
+    (input_dir / "audit_summary.json").write_text(
+        json.dumps(
+            {
+                "audit_checks": {
+                    "survivorship_bias": {
+                        "status": "PASS",
+                        "evidence": "historical runner scanned all symbols present in raw daily partitions",
+                    }
+                }
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            "scripts/run_final_leadlag_pipeline.py",
+            "--evaluated-trades",
+            str(evaluated_path),
+            "--output-dir",
+            str(output_dir),
+            "--min-train-count",
+            "1",
+            "--robustness-min-train-counts",
+            "1,2",
+            "--robustness-leadlag-thresholds",
+            "0.45,0.50",
+            "--run-id",
+            "final_cli_test_run",
+        ],
+        cwd=repo_root,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    manifest = json.loads((output_dir / "pipeline_manifest.json").read_text(encoding="utf-8"))
+
+    assert manifest["run_id"] == "final_cli_test_run"
+    assert manifest["artifact_schema_version"] == "leadlag_oos_v2"
+    assert manifest["audit_status"] == "PASS"
+    assert manifest["input_files"][0]["path"] == str(evaluated_path.resolve())
+    assert manifest["input_files"][0]["sha256"]
+    assert manifest["input_files"][0]["rows"] == len(_sample_evaluated()) * 25
+    assert "git_commit" in manifest["git"]
+    assert "code_dirty" in manifest["git"]

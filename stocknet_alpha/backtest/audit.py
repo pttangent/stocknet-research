@@ -1,7 +1,11 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+from datetime import UTC, datetime
+import hashlib
+from pathlib import Path
 import re
+import subprocess
 from typing import Any
 
 import pandas as pd
@@ -65,6 +69,43 @@ def all_audit_checks_pass(checks: Mapping[str, AuditCheck], *, required_keys: tu
     return all(coerce_audit_check(checks.get(key)).get("status") == "PASS" for key in required_keys)
 
 
+def summarize_audit_status(checks: Mapping[str, AuditCheck], *, required_keys: tuple[str, ...] | list[str]) -> str:
+    return "PASS" if all_audit_checks_pass(checks, required_keys=required_keys) else "FAIL"
+
+
+def describe_input_file(path: Path | str) -> dict[str, Any]:
+    source = Path(path).expanduser().resolve()
+    payload: dict[str, Any] = {
+        "path": str(source),
+        "sha256": _sha256_file(source),
+        "size_bytes": int(source.stat().st_size),
+        "rows": None,
+    }
+    suffix = source.suffix.lower()
+    try:
+        if suffix == ".parquet":
+            payload["rows"] = int(len(pd.read_parquet(source)))
+        elif suffix == ".csv":
+            payload["rows"] = int(len(pd.read_csv(source)))
+    except Exception:
+        payload["rows"] = None
+    return payload
+
+
+def read_git_provenance(repo_root: Path | str) -> dict[str, Any]:
+    root = Path(repo_root).expanduser().resolve()
+    commit = _run_git(root, "rev-parse", "HEAD")
+    dirty = _run_git(root, "status", "--porcelain")
+    return {
+        "git_commit": commit or "",
+        "code_dirty": bool((dirty or "").strip()),
+    }
+
+
+def utc_now_iso_z() -> str:
+    return datetime.now(UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+
+
 def evaluate_temporal_causality(trades: pd.DataFrame) -> AuditCheck:
     if trades.empty:
         return audit_fail("no realized trades available for temporal audit")
@@ -77,12 +118,19 @@ def evaluate_temporal_causality(trades: pd.DataFrame) -> AuditCheck:
     frame = trades.copy()
     for column in required:
         frame[column] = pd.to_datetime(frame[column], utc=True, errors="coerce")
+    if "feature_max_timestamp" in frame.columns:
+        frame["feature_max_timestamp"] = pd.to_datetime(frame["feature_max_timestamp"], utc=True, errors="coerce")
     invalid = frame[required].isna().any(axis=1)
     ordering = (
         (frame["signal_timestamp"] <= frame["decision_timestamp"])
         & (frame["decision_timestamp"] < frame["execution_timestamp"])
         & (frame["execution_timestamp"] <= frame["entry_time"])
     )
+    if "feature_max_timestamp" in frame.columns:
+        ordering = ordering & (
+            frame["feature_max_timestamp"].isna()
+            | (frame["feature_max_timestamp"] <= frame["decision_timestamp"])
+        )
     violations = int((invalid | ~ordering).sum())
     if violations:
         return audit_fail(f"{violations} realized trades violate signal/decision/execution ordering")
@@ -209,3 +257,27 @@ def inherit_required_audit_check(
     if check["status"] != "PASS":
         return audit_fail(f"upstream audit for {key} is not PASS: {check['evidence']}")
     return audit_pass(check["evidence"])
+
+
+def _sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _run_git(repo_root: Path, *args: str) -> str:
+    try:
+        result = subprocess.run(
+            ["git", *args],
+            cwd=repo_root,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+    except OSError:
+        return ""
+    if result.returncode != 0:
+        return ""
+    return result.stdout.strip()

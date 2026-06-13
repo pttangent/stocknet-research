@@ -66,11 +66,20 @@ def build_self_audit_report(
 
     lines = ["# Lead-Lag Backtest Self-Audit", ""]
     lines.extend(render_audit_checks(checks, labels=HISTORICAL_AUDIT_LABELS))
-    lines.extend(["", "## Aggregate Summary", ""])
+    lines.extend(["", "## Event Study Summary", ""])
     if aggregate_summary.empty:
         lines.append("No evaluated trades.")
     else:
         lines.append(aggregate_summary.to_string(index=False))
+    lines.extend(
+        [
+            "",
+            "## Scope",
+            "",
+            "- This report summarizes realized signal-level event-study outcomes only.",
+            "- It does not claim a portfolio-level equity curve, drawdown, or position-managed strategy backtest.",
+        ]
+    )
 
     notes = list(metadata.get("notes", []) or [])
     if notes:
@@ -82,15 +91,19 @@ def build_self_audit_report(
 
 
 def discover_trade_dates(
-    root: Path | str,
+    root: Path | str | Sequence[Path | str],
     *,
     start_date: str,
     end_date: str,
 ) -> list[str]:
-    base = Path(root).expanduser().resolve()
-    dates = []
-    for child in sorted(base.glob("date=*")):
-        value = child.name.replace("date=", "")
-        if start_date <= value <= end_date:
-            dates.append(value)
-    return dates
+    roots = root if isinstance(root, Sequence) and not isinstance(root, (str, Path)) else [root]
+    discovered: set[str] = set()
+    for item in roots:
+        base = Path(item).expanduser().resolve()
+        if not base.exists():
+            continue
+        for child in sorted(base.glob("date=*")):
+            value = child.name.replace("date=", "")
+            if start_date <= value <= end_date:
+                discovered.add(value)
+    return sorted(discovered)

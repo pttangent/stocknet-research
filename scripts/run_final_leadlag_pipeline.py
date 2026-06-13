@@ -11,9 +11,17 @@ ROOT_DIR = Path(__file__).resolve().parents[1]
 if str(ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(ROOT_DIR))
 
+from stocknet_alpha.backtest.audit import (
+    FINAL_AUDIT_LABELS,
+    describe_input_file,
+    read_git_provenance,
+    summarize_audit_status,
+    utc_now_iso_z,
+)
 from stocknet_alpha.backtest.confirmation_relabel import relabel_evaluated_trades_file
 from stocknet_alpha.backtest.final_pipeline import run_final_leadlag_pipeline
 from stocknet_alpha.config import AlphaPaths
+from stocknetwork.run_metadata import create_run_context
 
 
 def parse_args() -> argparse.Namespace:
@@ -36,6 +44,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--min-train-count", type=int, default=200)
     parser.add_argument("--min-valid-count", type=int, default=0)
     parser.add_argument("--leadlag-threshold", type=float, default=0.50)
+    parser.add_argument("--robustness-min-train-counts", default="180,200,220", help="Comma-separated min-train-count grid for robustness scan.")
+    parser.add_argument("--robustness-leadlag-thresholds", default="0.45,0.50,0.55", help="Comma-separated lead-lag threshold grid for robustness scan.")
+    parser.add_argument("--run-id", default="", help="Optional explicit run identifier for artifact provenance.")
     return parser.parse_args()
 
 
@@ -44,6 +55,14 @@ def main() -> None:
     source_path = Path(args.evaluated_trades).expanduser().resolve()
     output_dir = Path(args.output_dir).expanduser().resolve()
     output_dir.mkdir(parents=True, exist_ok=True)
+    run_context = create_run_context(
+        "run_final_leadlag_pipeline",
+        output_dir,
+        args=args,
+        inputs={"evaluated_trades": source_path},
+        run_id=args.run_id or None,
+    )
+    run_context.write_initial_metadata()
     audit_summary_path = source_path.parent / "audit_summary.json"
     audit_evidence: dict[str, object] = {}
     if audit_summary_path.exists():
@@ -71,6 +90,12 @@ def main() -> None:
         evaluated_path = relabeled_path
 
     evaluated = pd.read_parquet(evaluated_path)
+    robustness_min_train_counts = tuple(
+        int(value.strip()) for value in str(args.robustness_min_train_counts).split(",") if value.strip()
+    )
+    robustness_leadlag_thresholds = tuple(
+        float(value.strip()) for value in str(args.robustness_leadlag_thresholds).split(",") if value.strip()
+    )
     bundle = run_final_leadlag_pipeline(
         evaluated,
         train_months=args.train_months,
@@ -79,6 +104,8 @@ def main() -> None:
         min_train_count=args.min_train_count,
         min_valid_count=args.min_valid_count,
         leadlag_threshold=args.leadlag_threshold,
+        robustness_min_train_counts=robustness_min_train_counts,
+        robustness_leadlag_thresholds=robustness_leadlag_thresholds,
         audit_evidence=audit_evidence,
     )
 
@@ -96,25 +123,53 @@ def main() -> None:
     )
     (output_dir / "walk_forward_strategy_report.md").write_text(bundle["strategy_report"], encoding="utf-8")
     (output_dir / "walk_forward_strategy_self_audit.md").write_text(bundle["self_audit_report"], encoding="utf-8")
+    manifest_payload = {
+        "run_id": run_context.run_id,
+        "generated_at": utc_now_iso_z(),
+        "artifact_schema_version": "leadlag_oos_v2",
+        "audit_status": summarize_audit_status(bundle["audit_checks"], required_keys=tuple(FINAL_AUDIT_LABELS)),
+        "git": read_git_provenance(ROOT_DIR),
+        "input_files": [
+            describe_input_file(source_path),
+            *( [describe_input_file(audit_summary_path)] if audit_summary_path.exists() else [] ),
+        ],
+        "evaluated_trades": str(source_path),
+        "effective_evaluated_trades": str(evaluated_path),
+        "relabel_confirmations": bool(args.relabel_confirmations),
+        "train_months": args.train_months,
+        "valid_months": args.valid_months,
+        "test_months": args.test_months,
+        "min_train_count": args.min_train_count,
+        "min_valid_count": args.min_valid_count,
+        "leadlag_threshold": args.leadlag_threshold,
+        "robustness_min_train_counts": list(robustness_min_train_counts),
+        "robustness_leadlag_thresholds": list(robustness_leadlag_thresholds),
+        "source_audit_summary": str(audit_summary_path) if audit_summary_path.exists() else None,
+        "audit_checks": bundle["audit_checks"],
+    }
     (output_dir / "pipeline_manifest.json").write_text(
-        json.dumps(
-            {
-                "evaluated_trades": str(source_path),
-                "effective_evaluated_trades": str(evaluated_path),
-                "relabel_confirmations": bool(args.relabel_confirmations),
-                "train_months": args.train_months,
-                "valid_months": args.valid_months,
-                "test_months": args.test_months,
-                "min_train_count": args.min_train_count,
-                "min_valid_count": args.min_valid_count,
-                "leadlag_threshold": args.leadlag_threshold,
-                "source_audit_summary": str(audit_summary_path) if audit_summary_path.exists() else None,
-                "audit_checks": bundle["audit_checks"],
-            },
-            indent=2,
-            ensure_ascii=False,
-        ),
+        json.dumps(manifest_payload, indent=2, ensure_ascii=False),
         encoding="utf-8",
+    )
+    run_context.write_artifacts(
+        {
+            "walk_forward_rule_selection_csv": output_dir / "walk_forward_rule_selection.csv",
+            "walk_forward_strategy_trades_parquet": output_dir / "walk_forward_strategy_trades.parquet",
+            "walk_forward_strategy_split_summary_csv": output_dir / "walk_forward_strategy_split_summary.csv",
+            "strategy_robustness_scan_csv": output_dir / "strategy_robustness_scan.csv",
+            "walk_forward_strategy_summary_json": output_dir / "walk_forward_strategy_summary.json",
+            "strategy_robustness_summary_json": output_dir / "strategy_robustness_summary.json",
+            "walk_forward_strategy_report_md": output_dir / "walk_forward_strategy_report.md",
+            "walk_forward_strategy_self_audit_md": output_dir / "walk_forward_strategy_self_audit.md",
+            "pipeline_manifest_json": output_dir / "pipeline_manifest.json",
+        }
+    )
+    run_context.write_summary(
+        {
+            "status": "completed",
+            "audit_status": manifest_payload["audit_status"],
+            "selection_split_count": bundle["selection_summary"].get("split_count"),
+        }
     )
     print(f"Wrote final lead-lag pipeline artifacts to {output_dir}")
 

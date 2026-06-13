@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 import pandas as pd
 
 from stocknet_alpha.backtest.historical_leadlag import (
     aggregate_evaluated_trades,
     build_self_audit_report,
+    discover_trade_dates,
 )
 
 
@@ -55,3 +58,22 @@ def test_build_self_audit_report_surfaces_computed_checks_and_evidence():
     assert "Cost realism" in report
     assert "FAIL" in report
     assert "universe provenance missing" in report
+    assert "Event Study Summary" in report
+    assert "does not claim a portfolio-level equity curve" in report
+
+
+def test_discover_trade_dates_unions_available_partition_roots(tmp_path: Path):
+    raw_root = tmp_path / "raw_1m"
+    bars_root = tmp_path / "bars_5m"
+    flow_root = tmp_path / "trade_flow_1m"
+    (raw_root / "date=2025-09-02").mkdir(parents=True, exist_ok=True)
+    (bars_root / "date=2025-09-03").mkdir(parents=True, exist_ok=True)
+    (flow_root / "date=2025-09-04").mkdir(parents=True, exist_ok=True)
+
+    dates = discover_trade_dates(
+        [raw_root, bars_root, flow_root],
+        start_date="2025-09-01",
+        end_date="2025-09-05",
+    )
+
+    assert dates == ["2025-09-02", "2025-09-03", "2025-09-04"]

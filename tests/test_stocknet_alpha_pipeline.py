@@ -191,8 +191,10 @@ def test_generate_leadlag_signals_and_backtest_summary(tmp_path: Path):
     assert (signals["leadlag_score"] > 0).all()
     assert (signals["lag_minutes"] >= 1).all()
     assert "forward_return_1m" not in signals.columns
+    assert "feature_max_timestamp" in signals.columns
     assert "decision_timestamp" in signals.columns
     assert "execution_timestamp" in signals.columns
+    assert (pd.to_datetime(signals["feature_max_timestamp"], utc=True) <= pd.to_datetime(signals["decision_timestamp"], utc=True)).all()
     assert (signals["execution_timestamp"] > signals["decision_timestamp"]).all()
 
     evaluated = evaluate_leadlag_signals(
