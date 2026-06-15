@@ -1,0 +1,128 @@
+{
+  "run": [
+    {
+      "run_id": "pilot_2026_01_02_limit2_auto_tz",
+      "run_name": "Pilot 2026-01-02 limit2 auto tz",
+      "date_start": "2026-01-02T00:00:00",
+      "date_end": "2026-01-02T00:00:00",
+      "frame_minutes": 5,
+      "config_id": "pilot_limit2_auto_tz",
+      "config_json": "{\"run_id\": \"pilot_2026_01_02_limit2_auto_tz\", \"run_name\": \"Pilot 2026-01-02 limit2 auto tz\", \"date_start\": \"2026-01-02\", \"date_end\": \"2026-01-02\", \"config_id\": \"pilot_limit2_auto_tz\", \"config_name\": \"Pilot limit2 auto tz\", \"config_scope\": \"t1\", \"config_version\": \"v1\", \"code_commit\": \"local-dev\", \"frame_minutes\": 5}",
+      "code_commit": "local-dev",
+      "data_version": "duckdb:stocknet_us.duckdb:2026-01-02:symbol_limit:2",
+      "status": "completed",
+      "created_at": "2026-06-15T19:17:50.452854"
+    }
+  ],
+  "counts": {
+    "graph_snapshot": 78,
+    "graph_edge_summary": 468,
+    "graph_edges_thresholded": 126,
+    "layer_community": 126,
+    "layer_community_membership": 252,
+    "consensus_theme_candidate": 63,
+    "theme_membership": 126,
+    "theme_semantic_label": 63,
+    "theme_path_lifecycle": 63,
+    "theme_level_flow_series": 63,
+    "frontend_snapshot_cache": 78
+  },
+  "edges_by_layer": [
+    {
+      "graph_layer": "dtw_return_similarity_graph",
+      "edges": 63.0
+    },
+    {
+      "graph_layer": "dtw_trade_flow_similarity_graph",
+      "edges": 63.0
+    },
+    {
+      "graph_layer": "flow_alignment_graph",
+      "edges": 0.0
+    },
+    {
+      "graph_layer": "large_trade_alignment_graph",
+      "edges": 0.0
+    },
+    {
+      "graph_layer": "return_corr_graph",
+      "edges": 0.0
+    },
+    {
+      "graph_layer": "volume_expansion_graph",
+      "edges": 0.0
+    }
+  ],
+  "first_themes": [
+    {
+      "theme_instance_id": "pilot_2026_01_02_limit2_auto_tz_2026-01-02_1505_theme_001",
+      "snapshot_id": "pilot_2026_01_02_limit2_auto_tz_2026-01-02_1505",
+      "member_count": 2,
+      "consensus_score": 0.4,
+      "keep_status": "keep"
+    },
+    {
+      "theme_instance_id": "pilot_2026_01_02_limit2_auto_tz_2026-01-02_1510_theme_001",
+      "snapshot_id": "pilot_2026_01_02_limit2_auto_tz_2026-01-02_1510",
+      "member_count": 2,
+      "consensus_score": 0.4,
+      "keep_status": "keep"
+    },
+    {
+      "theme_instance_id": "pilot_2026_01_02_limit2_auto_tz_2026-01-02_1515_theme_001",
+      "snapshot_id": "pilot_2026_01_02_limit2_auto_tz_2026-01-02_1515",
+      "member_count": 2,
+      "consensus_score": 0.4,
+      "keep_status": "keep"
+    },
+    {
+      "theme_instance_id": "pilot_2026_01_02_limit2_auto_tz_2026-01-02_1520_theme_001",
+      "snapshot_id": "pilot_2026_01_02_limit2_auto_tz_2026-01-02_1520",
+      "member_count": 2,
+      "consensus_score": 0.4,
+      "keep_status": "keep"
+    },
+    {
+      "theme_instance_id": "pilot_2026_01_02_limit2_auto_tz_2026-01-02_1525_theme_001",
+      "snapshot_id": "pilot_2026_01_02_limit2_auto_tz_2026-01-02_1525",
+      "member_count": 2,
+      "consensus_score": 0.4,
+      "keep_status": "keep"
+    },
+    {
+      "theme_instance_id": "pilot_2026_01_02_limit2_auto_tz_2026-01-02_1530_theme_001",
+      "snapshot_id": "pilot_2026_01_02_limit2_auto_tz_2026-01-02_1530",
+      "member_count": 2,
+      "consensus_score": 0.4,
+      "keep_status": "keep"
+    },
+    {
+      "theme_instance_id": "pilot_2026_01_02_limit2_auto_tz_2026-01-02_1535_theme_001",
+      "snapshot_id": "pilot_2026_01_02_limit2_auto_tz_2026-01-02_1535",
+      "member_count": 2,
+      "consensus_score": 0.4,
+      "keep_status": "keep"
+    },
+    {
+      "theme_instance_id": "pilot_2026_01_02_limit2_auto_tz_2026-01-02_1540_theme_001",
+      "snapshot_id": "pilot_2026_01_02_limit2_auto_tz_2026-01-02_1540",
+      "member_count": 2,
+      "consensus_score": 0.4,
+      "keep_status": "keep"
+    },
+    {
+      "theme_instance_id": "pilot_2026_01_02_limit2_auto_tz_2026-01-02_1545_theme_001",
+      "snapshot_id": "pilot_2026_01_02_limit2_auto_tz_2026-01-02_1545",
+      "member_count": 2,
+      "consensus_score": 0.4,
+      "keep_status": "keep"
+    },
+    {
+      "theme_instance_id": "pilot_2026_01_02_limit2_auto_tz_2026-01-02_1550_theme_001",
+      "snapshot_id": "pilot_2026_01_02_limit2_auto_tz_2026-01-02_1550",
+      "member_count": 2,
+      "consensus_score": 0.4,
+      "keep_status": "keep"
+    }
+  ]
+}
