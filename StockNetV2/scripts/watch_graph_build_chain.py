@@ -55,7 +55,7 @@ def main() -> int:
     log_file.parent.mkdir(parents=True, exist_ok=True)
     full_history_database.parent.mkdir(parents=True, exist_ok=True)
 
-    trade_dates = _list_trade_dates(data_root)
+    trade_dates = _resolve_full_history_trade_dates(data_root)
     if not trade_dates:
         raise RuntimeError(f"No trade dates found under {data_root}")
     full_history_start = trade_dates[0]
@@ -118,13 +118,20 @@ def main() -> int:
     return 0
 
 
-def _list_trade_dates(data_root: Path) -> list[str]:
-    bars_root = data_root / "bars_5m"
-    if not bars_root.exists():
+def _resolve_full_history_trade_dates(data_root: Path) -> list[str]:
+    bars_trade_dates = set(_list_trade_dates_for_dataset(data_root, "bars_5m"))
+    raw_trade_dates = set(_list_trade_dates_for_dataset(data_root, "raw_1m"))
+    trade_flow_trade_dates = set(_list_trade_dates_for_dataset(data_root, "trade_flow_1m"))
+    return sorted(bars_trade_dates & raw_trade_dates & trade_flow_trade_dates)
+
+
+def _list_trade_dates_for_dataset(data_root: Path, dataset_name: str) -> list[str]:
+    dataset_root = data_root / dataset_name
+    if not dataset_root.exists():
         return []
     return sorted(
         child.name.split("=", 1)[1]
-        for child in bars_root.iterdir()
+        for child in dataset_root.iterdir()
         if child.is_dir() and child.name.startswith("date=")
     )
 
