@@ -13,6 +13,7 @@ from stocknetv2.application.services.lifecycle_service import LifecycleRecord, L
 from stocknetv2.application.services.read_model_service import ReadModelService
 from stocknetv2.application.services.semantic_service import SemanticLabelRecord, SemanticService
 from stocknetv2.application.services.theme_flow_service import ThemeFlowService
+from stocknetv2.application.services.theme_quality_service import ThemeQualityService
 from stocknetv2.infrastructure.repositories.audit_repository import AuditRepository
 from stocknetv2.infrastructure.repositories.graph_write_repository import GraphWriteRepository
 from stocknetv2.infrastructure.repositories.market_read_repository import TradeDateInputs
@@ -67,6 +68,7 @@ class ThemeDiscoveryOrchestrator:
         theme_write_repository: ThemeWriteRepository | None = None,
         semantic_service: SemanticService | None = None,
         lifecycle_service: LifecycleService | None = None,
+        theme_quality_service: ThemeQualityService | None = None,
         theme_flow_service: ThemeFlowService | None = None,
         read_model_service: ReadModelService | None = None,
         read_model_repository: ReadModelRepository | None = None,
@@ -80,153 +82,167 @@ class ThemeDiscoveryOrchestrator:
         self._theme_write_repository = theme_write_repository
         self._semantic_service = semantic_service
         self._lifecycle_service = lifecycle_service
+        self._theme_quality_service = theme_quality_service
         self._theme_flow_service = theme_flow_service
         self._read_model_service = read_model_service
         self._read_model_repository = read_model_repository
 
     def run(self, config: ThemeDiscoveryRunConfig) -> ThemeDiscoveryRunSummary:
-        trade_dates = self._select_trade_dates(config.date_start, config.date_end)
-        if not trade_dates:
-            raise RuntimeError("No available trade dates for the configured range.")
+        try:
+            trade_dates = self._select_trade_dates(config.date_start, config.date_end)
+            if not trade_dates:
+                raise RuntimeError("No available trade dates for the configured range.")
 
-        first_inputs = self._market_repository.load_trade_date_inputs(trade_dates[0])
-        config_json = config.to_config_json()
-        self._audit_repository.register_config(
-            config_id=config.config_id,
-            config_name=config.config_name,
-            config_scope=config.config_scope,
-            config_json=config_json,
-            config_version=config.config_version,
-        )
-        self._audit_repository.create_run(
-            run_id=config.run_id,
-            run_name=config.run_name,
-            date_start=config.date_start,
-            date_end=config.date_end,
-            frame_minutes=config.frame_minutes,
-            config_id=config.config_id,
-            config_json=config_json,
-            code_commit=config.code_commit,
-            data_version=first_inputs.data_version,
-        )
+            first_inputs = self._market_repository.load_trade_date_inputs(trade_dates[0])
+            config_json = config.to_config_json()
+            self._audit_repository.register_config(
+                config_id=config.config_id,
+                config_name=config.config_name,
+                config_scope=config.config_scope,
+                config_json=config_json,
+                config_version=config.config_version,
+            )
+            self._audit_repository.create_run(
+                run_id=config.run_id,
+                run_name=config.run_name,
+                date_start=config.date_start,
+                date_end=config.date_end,
+                frame_minutes=config.frame_minutes,
+                config_id=config.config_id,
+                config_json=config_json,
+                code_commit=config.code_commit,
+                data_version=first_inputs.data_version,
+            )
 
-        snapshot_rows: list[dict[str, object]] = []
-        lineage_records: list[dict[str, object]] = []
-        last_data_version = first_inputs.data_version
-        previous_candidates = []
-        previous_lifecycle_records: dict[str, LifecycleRecord] = {}
+            snapshot_rows: list[dict[str, object]] = []
+            lineage_records: list[dict[str, object]] = []
+            last_data_version = first_inputs.data_version
+            previous_candidates = []
+            previous_lifecycle_records: dict[str, LifecycleRecord] = {}
 
-        for trade_date in trade_dates:
-            inputs = self._market_repository.load_trade_date_inputs(trade_date)
-            last_data_version = inputs.data_version
-            lineage_records.extend(self._build_lineage_records(inputs))
-            session_open = self._snapshot_clock.session_open_timestamp(trade_date)
+            for trade_date in trade_dates:
+                inputs = self._market_repository.load_trade_date_inputs(trade_date)
+                last_data_version = inputs.data_version
+                lineage_records.extend(self._build_lineage_records(inputs))
+                session_open = self._snapshot_clock.session_open_timestamp(trade_date)
 
-            for snapshot_time in self._snapshot_clock.iter_trade_date(trade_date):
-                snapshot_id = f"{config.run_id}_{trade_date}_{snapshot_time.strftime('%H%M')}"
-                available_minutes = int((snapshot_time - session_open).total_seconds() // 60)
-                snapshot_rows.append(
-                    {
-                        "snapshot_id": snapshot_id,
-                        "run_id": config.run_id,
-                        "trade_date": trade_date,
-                        "timestamp": snapshot_time,
-                        "frame_minutes": config.frame_minutes,
-                        "market_session": "regular",
-                        "graph_status": "pending_layers",
-                        "available_minutes_since_open": available_minutes,
-                    }
-                )
-                if self._layer_execution_service and self._graph_write_repository:
-                    layer_result = self._layer_execution_service.execute_for_snapshot(
-                        inputs=inputs,
-                        snapshot_time=snapshot_time,
-                        session_open=session_open,
+                for snapshot_time in self._snapshot_clock.iter_trade_date(trade_date):
+                    snapshot_id = f"{config.run_id}_{trade_date}_{snapshot_time.strftime('%H%M')}"
+                    available_minutes = int((snapshot_time - session_open).total_seconds() // 60)
+                    snapshot_rows.append(
+                        {
+                            "snapshot_id": snapshot_id,
+                            "run_id": config.run_id,
+                            "trade_date": trade_date,
+                            "timestamp": snapshot_time,
+                            "frame_minutes": config.frame_minutes,
+                            "market_session": "regular",
+                            "graph_status": "pending_layers",
+                            "available_minutes_since_open": available_minutes,
+                        }
                     )
-                    self._graph_write_repository.save_layer_outputs(
-                        run_id=config.run_id,
-                        snapshot_id=snapshot_id,
-                        trade_date=trade_date,
-                        snapshot_time=snapshot_time,
-                        config_id=config.config_id,
-                        layer_edges=layer_result.layer_edges,
-                        layer_communities=layer_result.layer_communities,
-                    )
-                    if config.graph_build_only:
-                        continue
-                    if self._consensus_service and self._theme_write_repository:
-                        candidates = self._consensus_service.build_consensus_themes(
-                            run_id=config.run_id,
-                            snapshot_id=snapshot_id,
+                    if self._layer_execution_service and self._graph_write_repository:
+                        layer_result = self._layer_execution_service.execute_for_snapshot(
+                            inputs=inputs,
                             snapshot_time=snapshot_time,
-                            layer_communities=layer_result.layer_communities,
+                            session_open=session_open,
                         )
-                        lifecycle_records: list[LifecycleRecord] = []
-                        if self._lifecycle_service:
-                            candidates, lifecycle_records = self._lifecycle_service.assign_paths(
-                                candidates=candidates,
-                                previous_candidates=previous_candidates,
-                                previous_lifecycle_records=previous_lifecycle_records,
-                                timestamp=snapshot_time,
-                                frame_minutes=config.frame_minutes,
-                            )
-                        self._theme_write_repository.save_consensus_themes(
+                        self._graph_write_repository.save_layer_outputs(
                             run_id=config.run_id,
                             snapshot_id=snapshot_id,
                             trade_date=trade_date,
                             snapshot_time=snapshot_time,
-                            candidates=candidates,
+                            config_id=config.config_id,
+                            layer_edges=layer_result.layer_edges,
+                            layer_communities=layer_result.layer_communities,
                         )
-                        semantic_labels: list[SemanticLabelRecord] = []
-                        if self._semantic_service:
-                            semantic_labels = self._semantic_service.label_themes(candidates)
-                            self._theme_write_repository.save_semantic_labels(
+                        if config.graph_build_only:
+                            continue
+                        if self._consensus_service and self._theme_write_repository:
+                            candidates = self._consensus_service.build_consensus_themes(
                                 run_id=config.run_id,
                                 snapshot_id=snapshot_id,
-                                labels=semantic_labels,
-                            )
-                        if lifecycle_records:
-                            self._theme_write_repository.save_lifecycle_records(
-                                run_id=config.run_id,
-                                snapshot_id=snapshot_id,
-                                records=lifecycle_records,
-                            )
-                        if self._theme_flow_service:
-                            flow_records = self._theme_flow_service.build_theme_flow_records(
-                                candidates=candidates,
-                                inputs=inputs,
                                 snapshot_time=snapshot_time,
+                                layer_communities=layer_result.layer_communities,
                             )
-                            self._theme_write_repository.save_theme_flow_records(
+                            lifecycle_records: list[LifecycleRecord] = []
+                            if self._lifecycle_service:
+                                candidates, lifecycle_records = self._lifecycle_service.assign_paths(
+                                    candidates=candidates,
+                                    previous_candidates=previous_candidates,
+                                    previous_lifecycle_records=previous_lifecycle_records,
+                                    timestamp=snapshot_time,
+                                    frame_minutes=config.frame_minutes,
+                                )
+                            semantic_labels: list[SemanticLabelRecord] = []
+                            if self._semantic_service:
+                                semantic_labels = self._semantic_service.label_themes(candidates)
+                            flow_records = []
+                            if self._theme_flow_service:
+                                flow_records = self._theme_flow_service.build_theme_flow_records(
+                                    candidates=candidates,
+                                    inputs=inputs,
+                                    snapshot_time=snapshot_time,
+                                )
+                            if self._theme_quality_service:
+                                candidates = self._theme_quality_service.score_themes(
+                                    candidates,
+                                    semantic_labels=semantic_labels,
+                                    lifecycle_records=lifecycle_records,
+                                )
+                            self._theme_write_repository.save_consensus_themes(
                                 run_id=config.run_id,
                                 snapshot_id=snapshot_id,
-                                records=flow_records,
-                            )
-                        if self._read_model_service and self._read_model_repository:
-                            snapshot_caches = self._read_model_service.build_snapshot_caches(
-                                run_id=config.run_id,
-                                snapshot_id=snapshot_id,
-                                timestamp=snapshot_time,
+                                trade_date=trade_date,
+                                snapshot_time=snapshot_time,
                                 candidates=candidates,
-                                semantic_labels=semantic_labels,
-                                lifecycle_records=lifecycle_records,
                             )
-                            self._read_model_repository.save_snapshot_caches(snapshot_caches)
-                        previous_candidates = candidates
-                        previous_lifecycle_records = {
-                            record.theme_instance_id: record for record in lifecycle_records
-                        } or previous_lifecycle_records
+                            if semantic_labels:
+                                self._theme_write_repository.save_semantic_labels(
+                                    run_id=config.run_id,
+                                    snapshot_id=snapshot_id,
+                                    labels=semantic_labels,
+                                )
+                            if lifecycle_records:
+                                self._theme_write_repository.save_lifecycle_records(
+                                    run_id=config.run_id,
+                                    snapshot_id=snapshot_id,
+                                    records=lifecycle_records,
+                                )
+                            if flow_records:
+                                self._theme_write_repository.save_theme_flow_records(
+                                    run_id=config.run_id,
+                                    snapshot_id=snapshot_id,
+                                    records=flow_records,
+                                )
+                            if self._read_model_service and self._read_model_repository:
+                                snapshot_caches = self._read_model_service.build_snapshot_caches(
+                                    run_id=config.run_id,
+                                    snapshot_id=snapshot_id,
+                                    timestamp=snapshot_time,
+                                    candidates=candidates,
+                                    semantic_labels=semantic_labels,
+                                    lifecycle_records=lifecycle_records,
+                                )
+                                self._read_model_repository.save_snapshot_caches(snapshot_caches)
+                            previous_candidates = candidates
+                            previous_lifecycle_records = {
+                                record.theme_instance_id: record for record in lifecycle_records
+                            } or previous_lifecycle_records
 
-        self._audit_repository.add_input_lineage(run_id=config.run_id, snapshot_id=None, records=lineage_records)
-        self._audit_repository.create_snapshots(snapshot_rows)
-        self._audit_repository.complete_run(run_id=config.run_id, data_version=last_data_version)
+            self._audit_repository.add_input_lineage(run_id=config.run_id, snapshot_id=None, records=lineage_records)
+            self._audit_repository.create_snapshots(snapshot_rows)
+            self._audit_repository.complete_run(run_id=config.run_id, data_version=last_data_version)
 
-        return ThemeDiscoveryRunSummary(
-            run_id=config.run_id,
-            trade_dates_processed=trade_dates,
-            snapshot_count=len(snapshot_rows),
-            data_version=last_data_version,
-        )
+            return ThemeDiscoveryRunSummary(
+                run_id=config.run_id,
+                trade_dates_processed=trade_dates,
+                snapshot_count=len(snapshot_rows),
+                data_version=last_data_version,
+            )
+        finally:
+            if self._layer_execution_service and hasattr(self._layer_execution_service, "close"):
+                self._layer_execution_service.close()
 
     def _select_trade_dates(self, date_start: str, date_end: str) -> list[str]:
         available_trade_dates = self._market_repository.list_available_trade_dates("bars_5m")

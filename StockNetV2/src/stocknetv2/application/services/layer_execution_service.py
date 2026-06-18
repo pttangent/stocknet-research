@@ -1,19 +1,17 @@
 from __future__ import annotations
 
+import multiprocessing as mp
+from concurrent.futures import Executor, ProcessPoolExecutor
 from dataclasses import dataclass
+from typing import Callable
 
 import numpy as np
 import pandas as pd
 
 from stocknetv2.domain.community.community import Community
 from stocknetv2.domain.community.detector import detect_communities_from_edges
-from stocknetv2.domain.graph.dtw_return_similarity import build_dtw_return_similarity_edges
-from stocknetv2.domain.graph.dtw_trade_flow_similarity import build_dtw_trade_flow_similarity_edges
 from stocknetv2.domain.graph.edge import GraphEdge
-from stocknetv2.domain.graph.flow_alignment import build_flow_alignment_edges
-from stocknetv2.domain.graph.large_trade_alignment import build_large_trade_alignment_edges
-from stocknetv2.domain.graph.return_corr import build_return_corr_edges
-from stocknetv2.domain.graph.volume_expansion import build_volume_expansion_edges
+from stocknetv2.application.services.layer_worker import run_layer_builder
 from stocknetv2.infrastructure.repositories.market_read_repository import TradeDateInputs
 
 
@@ -26,6 +24,25 @@ class LayerExecutionResult:
 class LayerExecutionService:
     """Build all six T1 graph layers and detect per-layer communities."""
 
+    _LAYER_NAMES = (
+        "return_corr_graph",
+        "dtw_return_similarity_graph",
+        "flow_alignment_graph",
+        "dtw_trade_flow_similarity_graph",
+        "volume_expansion_graph",
+        "large_trade_alignment_graph",
+    )
+
+    def __init__(
+        self,
+        *,
+        parallel_workers: int = 1,
+        executor_factory: Callable[[int], Executor] | None = None,
+    ) -> None:
+        self._parallel_workers = max(1, parallel_workers)
+        self._executor_factory = executor_factory or _build_process_pool_executor
+        self._executor: Executor | None = None
+
     def execute_for_snapshot(
         self,
         *,
@@ -36,56 +53,65 @@ class LayerExecutionService:
         feature_frame = self._build_feature_frame(inputs)
         return_window = self._build_return_window(inputs.bars_5m, snapshot_time)
 
-        layer_edges: dict[str, list[GraphEdge]] = {
-            "return_corr_graph": build_return_corr_edges(
-                return_window=return_window,
-                snapshot_time=snapshot_time,
-                min_correlation=0.8,
-                top_k_per_symbol=3,
-            )
-            if not return_window.empty
-            else [],
-            "dtw_return_similarity_graph": build_dtw_return_similarity_edges(
-                features_1m=feature_frame,
-                snapshot_time=snapshot_time,
-                session_open=session_open,
-                min_similarity=0.9,
-                top_k_per_symbol=3,
-            ),
-            "flow_alignment_graph": build_flow_alignment_edges(
-                features_1m=feature_frame,
-                snapshot_time=snapshot_time,
-                min_score=0.9,
-                top_k_per_symbol=3,
-            ),
-            "dtw_trade_flow_similarity_graph": build_dtw_trade_flow_similarity_edges(
-                features_1m=feature_frame,
-                snapshot_time=snapshot_time,
-                session_open=session_open,
-                min_similarity=0.9,
-                top_k_per_symbol=3,
-            ),
-            "volume_expansion_graph": build_volume_expansion_edges(
-                feature_frame=feature_frame,
-                snapshot_time=snapshot_time,
-                min_score=0.9,
-                threshold=1.5,
-                top_k_per_symbol=3,
-            ),
-            "large_trade_alignment_graph": build_large_trade_alignment_edges(
-                feature_frame=feature_frame,
-                snapshot_time=snapshot_time,
-                min_score=0.9,
-                threshold=1.0,
-                top_k_per_symbol=3,
-            ),
-        }
+        layer_edges = self._execute_layer_builders(
+            feature_frame=feature_frame,
+            return_window=return_window,
+            snapshot_time=snapshot_time,
+            session_open=session_open,
+        )
 
         layer_communities = {
             layer_name: detect_communities_from_edges(edges, min_members=2)
             for layer_name, edges in layer_edges.items()
         }
         return LayerExecutionResult(layer_edges=layer_edges, layer_communities=layer_communities)
+
+    def close(self) -> None:
+        if self._executor and hasattr(self._executor, "shutdown"):
+            self._executor.shutdown(wait=True, cancel_futures=False)
+        self._executor = None
+
+    def _execute_layer_builders(
+        self,
+        *,
+        feature_frame: pd.DataFrame,
+        return_window: pd.DataFrame,
+        snapshot_time: pd.Timestamp,
+        session_open: pd.Timestamp,
+    ) -> dict[str, list[GraphEdge]]:
+        if self._parallel_workers <= 1:
+            return {
+                layer_name: run_layer_builder(
+                    layer_name,
+                    feature_frame,
+                    return_window,
+                    snapshot_time,
+                    session_open,
+                )
+                for layer_name in self._LAYER_NAMES
+            }
+
+        executor = self._get_or_create_executor()
+        futures = {
+            layer_name: executor.submit(
+                run_layer_builder,
+                layer_name,
+                feature_frame,
+                return_window,
+                snapshot_time,
+                session_open,
+            )
+            for layer_name in self._LAYER_NAMES
+        }
+        return {
+            layer_name: futures[layer_name].result()
+            for layer_name in self._LAYER_NAMES
+        }
+
+    def _get_or_create_executor(self) -> Executor:
+        if self._executor is None:
+            self._executor = self._executor_factory(min(self._parallel_workers, len(self._LAYER_NAMES)))
+        return self._executor
 
     @staticmethod
     def _build_feature_frame(inputs: TradeDateInputs) -> pd.DataFrame:
@@ -123,3 +149,10 @@ class LayerExecutionService:
             return pd.DataFrame()
         pivot = frame.pivot(index="timestamp", columns="symbol", values="close").sort_index()
         return np.log(pivot / pivot.shift(1)).dropna(how="all")
+
+
+def _build_process_pool_executor(max_workers: int) -> ProcessPoolExecutor:
+    return ProcessPoolExecutor(
+        max_workers=max_workers,
+        mp_context=mp.get_context("spawn"),
+    )

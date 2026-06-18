@@ -1,0 +1,168 @@
+from __future__ import annotations
+
+from dataclasses import replace
+from pathlib import Path
+
+import duckdb
+
+from stocknetv2.application.services.graph_build_range_service import (
+    GraphBuildRangeConfig,
+    GraphBuildRangeService,
+    GraphBuildShardResult,
+)
+from stocknetv2.infrastructure.db.schema_manager import SchemaManager
+from stocknetv2.infrastructure.repositories.audit_repository import AuditRepository
+
+
+class _StubMarketCalendar:
+    def list_available_trade_dates(self, dataset_name: str) -> list[str]:
+        assert dataset_name == "bars_5m"
+        return ["2025-01-02", "2025-01-03"]
+
+
+def _create_shard_database(path: Path, *, run_id: str, trade_date: str, config_id: str) -> None:
+    connection = duckdb.connect(str(path))
+    SchemaManager(connection).initialize()
+    audit_repository = AuditRepository(connection)
+    audit_repository.register_config(
+        config_id=config_id,
+        config_name="Graph build test",
+        config_scope="t1",
+        config_json={"config_id": config_id},
+        config_version="v1",
+    )
+    audit_repository.create_run(
+        run_id=run_id,
+        run_name=f"Run {trade_date}",
+        date_start=trade_date,
+        date_end=trade_date,
+        frame_minutes=5,
+        config_id=config_id,
+        config_json={"config_id": config_id},
+        code_commit="abc123",
+        data_version=f"bars_5m:{trade_date}",
+    )
+    audit_repository.create_snapshots(
+        [
+            {
+                "snapshot_id": f"{run_id}_{trade_date}_0930",
+                "run_id": run_id,
+                "trade_date": trade_date,
+                "timestamp": f"{trade_date} 14:30:00",
+                "frame_minutes": 5,
+                "market_session": "regular",
+                "graph_status": "complete",
+                "available_minutes_since_open": 0,
+            }
+        ]
+    )
+    audit_repository.complete_run(run_id=run_id, data_version=f"bars_5m:{trade_date}")
+    connection.close()
+
+
+def test_graph_build_range_service_merges_day_shards_into_single_database(tmp_path):
+    output_database = tmp_path / "month.duckdb"
+    shard_dir = tmp_path / "shards"
+    shard_dir.mkdir()
+
+    def worker(task):
+        _create_shard_database(
+            task.database_path,
+            run_id=task.run_id,
+            trade_date=task.trade_date,
+            config_id=task.config_id,
+        )
+        return GraphBuildShardResult(
+            trade_date=task.trade_date,
+            run_id=task.run_id,
+            database_path=task.database_path,
+            snapshot_count=1,
+            data_version=f"bars_5m:{task.trade_date}",
+            elapsed_seconds=0.1,
+        )
+
+    service = GraphBuildRangeService(
+        market_calendar=_StubMarketCalendar(),
+        shard_runner=worker,
+        max_workers=1,
+    )
+    config = GraphBuildRangeConfig(
+        data_root=tmp_path,
+        output_database_path=output_database,
+        date_start="2025-01-02",
+        date_end="2025-01-03",
+        run_prefix="graph-build",
+        config_id="graph-build-config",
+        config_name="Graph build config",
+        config_version="v1",
+        code_commit="abc123",
+        shard_directory=shard_dir,
+        keep_shards=True,
+    )
+
+    summary = service.run(config)
+
+    assert summary.processed_dates == ["2025-01-02", "2025-01-03"]
+    connection = duckdb.connect(str(output_database))
+    assert connection.execute("SELECT COUNT(*) FROM theme_discovery_run").fetchone()[0] == 2
+    assert connection.execute("SELECT COUNT(*) FROM graph_snapshot").fetchone()[0] == 2
+    connection.close()
+
+
+def test_graph_build_range_service_dispatches_dates_via_executor(tmp_path):
+    submitted_trade_dates: list[str] = []
+
+    class _InlineExecutor:
+        def __enter__(self) -> _InlineExecutor:
+            return self
+
+        def __exit__(self, exc_type, exc, tb) -> None:
+            return None
+
+        def submit(self, fn, *args, **kwargs):
+            submitted_trade_dates.append(args[0].trade_date)
+            class _DoneFuture:
+                def result(self):
+                    return fn(*args, **kwargs)
+
+            return _DoneFuture()
+
+    def worker(task):
+        _create_shard_database(
+            task.database_path,
+            run_id=task.run_id,
+            trade_date=task.trade_date,
+            config_id=task.config_id,
+        )
+        return GraphBuildShardResult(
+            trade_date=task.trade_date,
+            run_id=task.run_id,
+            database_path=task.database_path,
+            snapshot_count=1,
+            data_version=f"bars_5m:{task.trade_date}",
+            elapsed_seconds=0.1,
+        )
+
+    service = GraphBuildRangeService(
+        market_calendar=_StubMarketCalendar(),
+        shard_runner=worker,
+        max_workers=2,
+        executor_factory=lambda max_workers: _InlineExecutor(),
+    )
+    config = GraphBuildRangeConfig(
+        data_root=tmp_path,
+        output_database_path=tmp_path / "month.duckdb",
+        date_start="2025-01-02",
+        date_end="2025-01-03",
+        run_prefix="graph-build",
+        config_id="graph-build-config",
+        config_name="Graph build config",
+        config_version="v1",
+        code_commit="abc123",
+        shard_directory=tmp_path / "shards",
+        keep_shards=True,
+    )
+
+    service.run(config)
+
+    assert submitted_trade_dates == ["2025-01-02", "2025-01-03"]

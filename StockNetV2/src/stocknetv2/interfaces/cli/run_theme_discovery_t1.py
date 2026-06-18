@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 from pathlib import Path
 
 import duckdb
@@ -15,6 +16,7 @@ from stocknetv2.application.services.lifecycle_service import LifecycleService
 from stocknetv2.application.services.read_model_service import ReadModelService
 from stocknetv2.application.services.semantic_service import SemanticService
 from stocknetv2.application.services.theme_flow_service import ThemeFlowService
+from stocknetv2.application.services.theme_quality_service import ThemeQualityService
 from stocknetv2.domain.snapshot.snapshot_clock import SnapshotClock
 from stocknetv2.infrastructure.db.schema_manager import SchemaManager
 from stocknetv2.infrastructure.repositories.audit_repository import AuditRepository
@@ -44,6 +46,7 @@ def run_theme_discovery(
     config_scope: str,
     config_version: str,
     code_commit: str,
+    layer_workers: int = 1,
 ):
     resolved_database_path = Path(database_path).expanduser().resolve()
     resolved_database_path.parent.mkdir(parents=True, exist_ok=True)
@@ -63,12 +66,13 @@ def run_theme_discovery(
             ),
             audit_repository=AuditRepository(connection),
             snapshot_clock=SnapshotClock(),
-            layer_execution_service=LayerExecutionService(),
+            layer_execution_service=LayerExecutionService(parallel_workers=max(1, layer_workers)),
             graph_write_repository=GraphWriteRepository(connection),
             consensus_service=ConsensusService(),
             theme_write_repository=ThemeWriteRepository(connection),
             semantic_service=SemanticService(),
             lifecycle_service=LifecycleService(),
+            theme_quality_service=ThemeQualityService(),
             theme_flow_service=ThemeFlowService(),
             read_model_service=ReadModelService(),
             read_model_repository=ReadModelRepository(connection),
@@ -107,6 +111,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--config-scope", default="t1")
     parser.add_argument("--config-version", required=True)
     parser.add_argument("--code-commit", required=True)
+    parser.add_argument("--layer-workers", type=int, help="Process workers for per-snapshot layer builds.")
     return parser.parse_args()
 
 
@@ -127,6 +132,7 @@ def main() -> int:
         config_scope=args.config_scope,
         config_version=args.config_version,
         code_commit=args.code_commit,
+        layer_workers=args.layer_workers or _default_layer_workers(graph_build_only=args.graph_build_only),
     )
     print(
         f"Completed run {summary.run_id} for {len(summary.trade_dates_processed)} trade date(s) "
@@ -144,6 +150,13 @@ def _build_market_source(
     if legacy_data_root:
         return LegacySourceLayout(data_root=legacy_data_root)
     raise ValueError("Either legacy_data_root or legacy_database_path must be provided.")
+
+
+def _default_layer_workers(*, graph_build_only: bool) -> int:
+    if graph_build_only:
+        return 1
+    available_cpus = os.cpu_count() or 1
+    return max(1, min(6, available_cpus))
 
 
 if __name__ == "__main__":

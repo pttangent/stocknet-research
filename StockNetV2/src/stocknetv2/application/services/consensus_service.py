@@ -29,6 +29,14 @@ class ConsensusThemeCandidate:
     members: list[str]
     source_layers: list[str]
     consensus_score: float
+    structure_score: float
+    cross_layer_consensus_score: float
+    flow_support_score: float
+    dtw_flow_support_score: float
+    volume_support_score: float
+    large_trade_support_score: float
+    stability_score: float
+    semantic_coherence_score: float
     theme_quality_score: float
     theme_quality_breakdown_json: str
 
@@ -98,6 +106,14 @@ class ConsensusService:
                     members=community.members,
                     source_layers=source_layers,
                     consensus_score=consensus_score,
+                    structure_score=consensus_score,
+                    cross_layer_consensus_score=consensus_score,
+                    flow_support_score=1.0 if "flow_alignment_graph" in source_layers else 0.0,
+                    dtw_flow_support_score=1.0 if "dtw_trade_flow_similarity_graph" in source_layers else 0.0,
+                    volume_support_score=1.0 if "volume_expansion_graph" in source_layers else 0.0,
+                    large_trade_support_score=1.0 if "large_trade_alignment_graph" in source_layers else 0.0,
+                    stability_score=0.0,
+                    semantic_coherence_score=0.0,
                     theme_quality_score=consensus_score,
                     theme_quality_breakdown_json=quality_breakdown,
                 )

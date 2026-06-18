@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from datetime import UTC, datetime
 
 import duckdb
@@ -19,6 +20,7 @@ from stocknetv2.infrastructure.repositories.read_model_repository import ReadMod
 from stocknetv2.infrastructure.repositories.theme_write_repository import ThemeWriteRepository
 from stocknetv2.application.services.semantic_service import SemanticService
 from stocknetv2.application.services.lifecycle_service import LifecycleService
+from stocknetv2.application.services.theme_quality_service import ThemeQualityService
 from stocknetv2.application.services.theme_flow_service import ThemeFlowService
 from stocknetv2.application.services.read_model_service import ReadModelService
 
@@ -97,6 +99,7 @@ def test_orchestrator_persists_semantic_lifecycle_flow_and_cache_outputs():
         theme_write_repository=ThemeWriteRepository(connection),
         semantic_service=SemanticService(),
         lifecycle_service=LifecycleService(),
+        theme_quality_service=ThemeQualityService(),
         theme_flow_service=ThemeFlowService(),
         read_model_service=ReadModelService(),
         read_model_repository=ReadModelRepository(connection),
@@ -133,6 +136,25 @@ def test_orchestrator_persists_semantic_lifecycle_flow_and_cache_outputs():
         "SELECT cache_type, COUNT(*) FROM frontend_snapshot_cache WHERE run_id = ? GROUP BY cache_type ORDER BY cache_type",
         ["run_enriched_test"],
     ).fetchall()
+    quality_rows = connection.execute(
+        """
+        SELECT
+            structure_score,
+            cross_layer_consensus_score,
+            flow_support_score,
+            dtw_flow_support_score,
+            volume_support_score,
+            large_trade_support_score,
+            stability_score,
+            semantic_coherence_score,
+            theme_quality_score,
+            theme_quality_breakdown_json
+        FROM consensus_theme_candidate
+        WHERE run_id = ?
+        ORDER BY timestamp, theme_instance_id
+        """,
+        ["run_enriched_test"],
+    ).fetchall()
 
     assert semantic_count >= 2
     assert lifecycle_rows[0][0] == "birth"
@@ -140,3 +162,9 @@ def test_orchestrator_persists_semantic_lifecycle_flow_and_cache_outputs():
     assert lifecycle_rows[0][1] == lifecycle_rows[1][1]
     assert flow_count >= 2
     assert ("snapshot_summary", 2) in cache_rows
+    assert all(row[0] > 0.0 for row in quality_rows)
+    assert all(row[1] > 0.0 for row in quality_rows)
+    assert any(row[6] > 0.0 for row in quality_rows)
+    assert all(row[7] > 0.0 for row in quality_rows)
+    assert all(row[8] > 0.0 for row in quality_rows)
+    assert all("component_scores" in json.loads(row[9]) for row in quality_rows)

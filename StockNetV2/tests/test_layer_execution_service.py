@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
+from concurrent.futures import Future
 
 import pandas as pd
 
@@ -70,3 +71,45 @@ def test_layer_execution_service_builds_all_six_layer_outputs():
         "large_trade_alignment_graph",
     }
     assert all(len(edges) >= 1 for edges in result.layer_edges.values())
+
+
+class _InlineExecutor:
+    def __init__(self) -> None:
+        self.submitted_layer_names: list[str] = []
+
+    def __enter__(self) -> _InlineExecutor:
+        return self
+
+    def __exit__(self, exc_type, exc, tb) -> None:
+        return None
+
+    def submit(self, fn, *args, **kwargs):
+        self.submitted_layer_names.append(args[0])
+        future = Future()
+        future.set_result(fn(*args, **kwargs))
+        return future
+
+
+def test_layer_execution_service_can_dispatch_layers_through_executor():
+    executor = _InlineExecutor()
+    service = LayerExecutionService(
+        parallel_workers=3,
+        executor_factory=lambda max_workers: executor,
+    )
+    inputs = _build_trade_date_inputs()
+
+    result = service.execute_for_snapshot(
+        inputs=inputs,
+        snapshot_time=pd.Timestamp("2026-01-02T14:50:00Z"),
+        session_open=pd.Timestamp("2026-01-02T14:30:00Z"),
+    )
+
+    assert executor.submitted_layer_names == [
+        "return_corr_graph",
+        "dtw_return_similarity_graph",
+        "flow_alignment_graph",
+        "dtw_trade_flow_similarity_graph",
+        "volume_expansion_graph",
+        "large_trade_alignment_graph",
+    ]
+    assert set(result.layer_edges) == set(executor.submitted_layer_names)
