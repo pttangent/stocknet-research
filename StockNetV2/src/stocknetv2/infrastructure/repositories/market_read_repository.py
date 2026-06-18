@@ -7,7 +7,9 @@ from typing import Protocol
 from zoneinfo import ZoneInfo
 
 import duckdb
+import numpy as np
 import pandas as pd
+import pyarrow.parquet as pq
 
 from stocknetv2.domain.snapshot.snapshot_clock import SnapshotClock
 
@@ -19,6 +21,7 @@ class LegacySourceLayout:
     def __post_init__(self) -> None:
         data_root = Path(self.data_root).expanduser().resolve()
         object.__setattr__(self, "data_root", data_root)
+        object.__setattr__(self, "raw_1m_root", data_root / "raw_1m")
         object.__setattr__(self, "bars_5m_root", data_root / "bars_5m")
         object.__setattr__(self, "trade_flow_1m_root", data_root / "trade_flow_1m")
         object.__setattr__(self, "features_1m_root", data_root / "features_1m")
@@ -76,13 +79,55 @@ class MarketReadRepository:
         if isinstance(self._source, LegacyDuckDBSource):
             return self._load_trade_date_inputs_from_duckdb(trade_date)
 
-        bars_5m = self._read_optional_parquet(self._source.bars_5m_root / f"date={trade_date}" / "bars_5m.parquet")
-        trade_flow_1m = self._read_optional_parquet(
-            self._source.trade_flow_1m_root / f"date={trade_date}" / "trade_flow_1m.parquet"
+        bars_5m = self._read_optional_parquet(
+            self._source.bars_5m_root / f"date={trade_date}" / "bars_5m.parquet",
+            columns=["timestamp", "close", "symbol"],
         )
-        features_1m = self._read_optional_parquet(
-            self._source.features_1m_root / f"date={trade_date}" / "features_1m.parquet"
+        raw_1m = self._read_optional_parquet(
+            self._source.raw_1m_root / f"date={trade_date}" / "bars_1m.parquet",
+            columns=["symbol", "timestamp", "close", "volume", "dollar_volume"],
         )
+        trade_flow_raw = self._read_optional_parquet(
+            self._source.trade_flow_1m_root / f"date={trade_date}" / "trade_flow_1m.parquet",
+            columns=[
+                "ticker",
+                "minute",
+                "trade_count",
+                "dollar_volume",
+                "imbalance_proxy",
+                "large_trade_dollar_volume",
+            ],
+        )
+        features_raw = self._read_optional_parquet(
+            self._source.features_1m_root / f"date={trade_date}" / "features_1m.parquet",
+            columns=[
+                "symbol",
+                "timestamp",
+                "bar_end",
+                "ret_1m_past",
+                "volume_z_proxy",
+                "large_trade_ratio",
+                "imbalance_proxy",
+                "flow_impulse_score",
+                "ret_1m",
+                "volume_z_12",
+                "large_trade_ratio_z",
+                "imbalance_z",
+            ],
+        )
+        trade_flow_1m = self._sort_frame(
+            self._normalize_trade_flow_1m(trade_flow_raw),
+            ["timestamp", "symbol"],
+        )
+        features_1m = self._sort_frame(
+            self._normalize_layout_features_1m(features_raw),
+            ["timestamp", "symbol"],
+        )
+        generated_features = False
+        if features_1m.empty and not raw_1m.empty:
+            features_1m = self._build_generated_features_1m(raw_1m=raw_1m, trade_flow_1m=trade_flow_raw)
+            generated_features = not features_1m.empty
+
         bars_5m, trade_flow_1m, features_1m = self._apply_symbol_limit(
             bars_5m=bars_5m,
             trade_flow_1m=trade_flow_1m,
@@ -90,6 +135,8 @@ class MarketReadRepository:
         )
 
         data_version = f"bars_5m:{trade_date}|trade_flow_1m:{trade_date}|features_1m:{trade_date}"
+        if generated_features:
+            data_version = f"{data_version}|generated_features_1m:raw_1m+trade_flow_1m"
         if self._symbol_limit is not None:
             data_version = f"{data_version}|symbol_limit:{self._symbol_limit}"
         return TradeDateInputs(
@@ -110,10 +157,16 @@ class MarketReadRepository:
         raise ValueError(f"Unsupported dataset_name: {dataset_name}")
 
     @staticmethod
-    def _read_optional_parquet(path: Path) -> pd.DataFrame:
+    def _read_optional_parquet(path: Path, columns: list[str] | None = None) -> pd.DataFrame:
         if not path.exists():
             return pd.DataFrame()
-        frame = pd.read_parquet(path)
+        resolved_columns = columns
+        if columns is not None:
+            available_columns = set(pq.ParquetFile(path).schema_arrow.names)
+            resolved_columns = [column for column in columns if column in available_columns]
+            if not resolved_columns:
+                resolved_columns = None
+        frame = pd.read_parquet(path, columns=resolved_columns)
         if "timestamp" in frame.columns:
             frame["timestamp"] = pd.to_datetime(frame["timestamp"], utc=True)
         return frame
@@ -212,21 +265,29 @@ class MarketReadRepository:
 
     def _normalize_trade_flow_1m(self, frame: pd.DataFrame) -> pd.DataFrame:
         if frame.empty:
-            return pd.DataFrame()
-        normalized = frame.rename(
-            columns={
-                "ticker": "symbol",
-                "minute": "timestamp",
-                "imbalance_proxy": "imbalance_z",
-            }
-        ).copy()
+            return pd.DataFrame(columns=["symbol", "timestamp"])
+        normalized = frame.copy()
+        if "ticker" in normalized.columns:
+            normalized = normalized.rename(columns={"ticker": "symbol"})
+        if "minute" in normalized.columns:
+            normalized = normalized.rename(columns={"minute": "timestamp"})
+        if "imbalance_proxy" in normalized.columns and "imbalance_z" not in normalized.columns:
+            normalized = normalized.rename(columns={"imbalance_proxy": "imbalance_z"})
         normalized = self._normalize_duckdb_timestamps(normalized, ["timestamp"])
-        normalized["flow_impulse_score"] = normalized.get("imbalance_z", 0.0).astype(float)
+        if "flow_impulse_score" not in normalized.columns:
+            if "imbalance_z" in normalized.columns:
+                normalized["flow_impulse_score"] = pd.to_numeric(normalized["imbalance_z"], errors="coerce").fillna(0.0)
+            else:
+                normalized["flow_impulse_score"] = 0.0
         if "large_trade_ratio_z" not in normalized.columns:
-            dollar_volume = normalized.get("dollar_volume", 0.0).replace(0, pd.NA)
-            normalized["large_trade_ratio_z"] = (
-                normalized.get("large_trade_dollar_volume", 0.0).astype(float) / dollar_volume.astype(float)
-            ).fillna(0.0)
+            if "large_trade_dollar_volume" in normalized.columns and "dollar_volume" in normalized.columns:
+                dollar_volume = pd.to_numeric(normalized["dollar_volume"], errors="coerce").replace(0.0, np.nan)
+                normalized["large_trade_ratio_z"] = (
+                    pd.to_numeric(normalized["large_trade_dollar_volume"], errors="coerce").fillna(0.0)
+                    / dollar_volume.astype(float)
+                ).fillna(0.0)
+            else:
+                normalized["large_trade_ratio_z"] = 0.0
         return normalized
 
     def _normalize_features_1m(self, frame: pd.DataFrame) -> pd.DataFrame:
@@ -242,6 +303,109 @@ class MarketReadRepository:
         ).copy()
         normalized = self._normalize_duckdb_timestamps(normalized, ["timestamp", "bar_end"])
         return normalized
+
+    def _normalize_layout_features_1m(self, frame: pd.DataFrame) -> pd.DataFrame:
+        if frame.empty:
+            return pd.DataFrame(columns=["symbol", "timestamp"])
+        normalized = frame.copy()
+        if "timestamp" in normalized.columns:
+            normalized["timestamp"] = pd.to_datetime(normalized["timestamp"], utc=True, errors="coerce")
+        if "bar_end" in normalized.columns:
+            normalized["bar_end"] = pd.to_datetime(normalized["bar_end"], utc=True, errors="coerce")
+        rename_map = {
+            "ret_1m_past": "ret_1m",
+            "volume_z_proxy": "volume_z_12",
+            "large_trade_ratio": "large_trade_ratio_z",
+            "imbalance_proxy": "imbalance_z",
+        }
+        normalized = normalized.rename(columns={key: value for key, value in rename_map.items() if key in normalized.columns})
+        return normalized
+
+    @staticmethod
+    def _build_generated_features_1m(raw_1m: pd.DataFrame, trade_flow_1m: pd.DataFrame) -> pd.DataFrame:
+        if raw_1m.empty:
+            return pd.DataFrame()
+
+        bars = raw_1m.copy()
+        bars["symbol"] = bars["symbol"].astype(str)
+        bars["timestamp"] = pd.to_datetime(bars["timestamp"], utc=True, errors="coerce")
+        for column in ["close", "volume", "dollar_volume"]:
+            if column in bars.columns:
+                bars[column] = pd.to_numeric(bars[column], errors="coerce")
+
+        flow = trade_flow_1m.copy()
+        if flow.empty:
+            flow = pd.DataFrame(columns=["symbol", "timestamp", "trade_count", "imbalance_proxy", "large_trade_dollar_volume"])
+        else:
+            flow = flow.rename(columns={"ticker": "symbol", "minute": "timestamp"}).copy()
+            flow["symbol"] = flow["symbol"].astype(str)
+            flow["timestamp"] = pd.to_datetime(flow["timestamp"], utc=True, errors="coerce")
+            for column in ["trade_count", "imbalance_proxy", "large_trade_dollar_volume"]:
+                if column not in flow.columns:
+                    flow[column] = np.nan
+                flow[column] = pd.to_numeric(flow[column], errors="coerce")
+            flow = flow[["symbol", "timestamp", "trade_count", "imbalance_proxy", "large_trade_dollar_volume"]]
+
+        merged = bars.merge(flow, on=["symbol", "timestamp"], how="left")
+        merged = merged.sort_values(["symbol", "timestamp"]).reset_index(drop=True)
+        by_symbol = merged.groupby("symbol", sort=False)
+
+        merged["ret_1m"] = by_symbol["close"].pct_change()
+        merged["volume_z_12"] = MarketReadRepository._ratio_to_rolling_mean(by_symbol["volume"])
+        merged["dollar_volume_z_proxy"] = MarketReadRepository._ratio_to_rolling_mean(by_symbol["dollar_volume"])
+        merged["trade_count_z_proxy"] = MarketReadRepository._ratio_to_rolling_mean(by_symbol["trade_count"])
+        merged["large_trade_ratio"] = (
+            merged["large_trade_dollar_volume"].fillna(0.0).astype(float)
+            / merged["dollar_volume"].replace(0.0, np.nan).astype(float)
+        ).fillna(0.0)
+
+        for source_column, output_column in [
+            ("imbalance_proxy", "imbalance_z"),
+            ("large_trade_ratio", "large_trade_ratio_z"),
+        ]:
+            rolling_mean = merged.groupby("symbol", sort=False)[source_column].transform(
+                lambda series: series.shift(1).rolling(30, min_periods=3).mean()
+            )
+            rolling_std = merged.groupby("symbol", sort=False)[source_column].transform(
+                lambda series: series.shift(1).rolling(30, min_periods=3).std(ddof=0)
+            )
+            merged[output_column] = (
+                (merged[source_column] - rolling_mean) / rolling_std.replace(0.0, np.nan)
+            ).replace([np.inf, -np.inf], np.nan)
+
+        merged["flow_impulse_score"] = (
+            0.35 * merged["dollar_volume_z_proxy"].fillna(0.0)
+            + 0.25 * merged["trade_count_z_proxy"].fillna(0.0)
+            + 0.25 * merged["imbalance_z"].fillna(0.0)
+            + 0.15 * merged["large_trade_ratio_z"].fillna(0.0)
+        )
+
+        return merged[
+            [
+                "symbol",
+                "timestamp",
+                "ret_1m",
+                "volume_z_12",
+                "imbalance_z",
+                "large_trade_ratio_z",
+                "flow_impulse_score",
+            ]
+        ].copy()
+
+    @staticmethod
+    def _ratio_to_rolling_mean(grouped: pd.core.groupby.generic.SeriesGroupBy) -> pd.Series:
+        rolling_mean = grouped.transform(lambda series: series.shift(1).rolling(30, min_periods=1).mean())
+        current = grouped.obj.astype(float)
+        return ((current / rolling_mean.replace(0.0, np.nan)) - 1.0).replace([np.inf, -np.inf], np.nan)
+
+    @staticmethod
+    def _sort_frame(frame: pd.DataFrame, columns: list[str]) -> pd.DataFrame:
+        if frame.empty:
+            return frame.reset_index(drop=True)
+        available_columns = [column for column in columns if column in frame.columns]
+        if not available_columns:
+            return frame.reset_index(drop=True)
+        return frame.sort_values(available_columns).reset_index(drop=True)
 
     def _load_limited_symbols(self, connection: duckdb.DuckDBPyConnection, trade_date: str) -> list[str] | None:
         if self._symbol_limit is None:

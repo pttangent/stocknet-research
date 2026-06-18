@@ -38,6 +38,7 @@ class ThemeDiscoveryRunConfig:
     config_version: str
     code_commit: str
     frame_minutes: int = 5
+    graph_build_only: bool = False
 
     def to_config_json(self) -> dict[str, str | int]:
         return asdict(self)
@@ -151,6 +152,8 @@ class ThemeDiscoveryOrchestrator:
                         layer_edges=layer_result.layer_edges,
                         layer_communities=layer_result.layer_communities,
                     )
+                    if config.graph_build_only:
+                        continue
                     if self._consensus_service and self._theme_write_repository:
                         candidates = self._consensus_service.build_consensus_themes(
                             run_id=config.run_id,

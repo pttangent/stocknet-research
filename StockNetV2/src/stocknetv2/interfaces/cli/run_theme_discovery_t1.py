@@ -34,6 +34,7 @@ def run_theme_discovery(
     legacy_data_root: Path | str | None = None,
     legacy_database_path: Path | str | None = None,
     symbol_limit: int | None = None,
+    graph_build_only: bool = False,
     run_id: str,
     run_name: str,
     date_start: str,
@@ -82,6 +83,7 @@ def run_theme_discovery(
             config_scope=config_scope,
             config_version=config_version,
             code_commit=code_commit,
+            graph_build_only=graph_build_only,
         )
         return orchestrator.run(config)
     finally:
@@ -95,6 +97,7 @@ def parse_args() -> argparse.Namespace:
     source_group.add_argument("--legacy-data-root", help="Legacy StockNet data root.")
     source_group.add_argument("--legacy-database", help="Legacy StockNet DuckDB path.")
     parser.add_argument("--symbol-limit", type=int, help="Optional pilot limit on number of symbols.")
+    parser.add_argument("--graph-build-only", action="store_true", help="Build graph layers only and skip theme downstream.")
     parser.add_argument("--run-id", required=True)
     parser.add_argument("--run-name", required=True)
     parser.add_argument("--date-start", required=True)
@@ -114,6 +117,7 @@ def main() -> int:
         legacy_data_root=args.legacy_data_root,
         legacy_database_path=args.legacy_database,
         symbol_limit=args.symbol_limit,
+        graph_build_only=args.graph_build_only,
         run_id=args.run_id,
         run_name=args.run_name,
         date_start=args.date_start,

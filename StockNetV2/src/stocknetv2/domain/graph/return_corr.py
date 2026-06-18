@@ -1,10 +1,10 @@
 from __future__ import annotations
 
-from collections import defaultdict
-
+import numpy as np
 import pandas as pd
 
 from stocknetv2.domain.graph.edge import GraphEdge
+from stocknetv2.domain.graph.series_utils import select_topk_pair_indices
 
 
 def build_return_corr_edges(
@@ -15,45 +15,27 @@ def build_return_corr_edges(
     top_k_per_symbol: int,
 ) -> list[GraphEdge]:
     correlation = return_window.corr(min_periods=len(return_window)).fillna(0.0)
-    candidates: list[GraphEdge] = []
+    score_matrix = correlation.to_numpy(dtype=float, copy=True)
+    np.fill_diagonal(score_matrix, -np.inf)
+    symbols = correlation.columns.tolist()
 
-    for left_symbol in correlation.columns:
-        for right_symbol in correlation.columns:
-            if left_symbol >= right_symbol:
-                continue
-            score = float(correlation.loc[left_symbol, right_symbol])
-            if score < min_correlation:
-                continue
-            candidates.append(
-                GraphEdge(
-                    graph_layer="return_corr_graph",
-                    edge_type="return_correlation",
-                    source_symbol=left_symbol,
-                    target_symbol=right_symbol,
-                    snapshot_time=snapshot_time,
-                    weight=score,
-                    raw_score=score,
-                    support_points=len(return_window),
-                )
+    edges: list[GraphEdge] = []
+    for left_index, right_index in select_topk_pair_indices(
+        score_matrix,
+        min_score=min_correlation,
+        top_k_per_symbol=top_k_per_symbol,
+    ):
+        score = float(score_matrix[left_index, right_index])
+        edges.append(
+            GraphEdge(
+                graph_layer="return_corr_graph",
+                edge_type="return_correlation",
+                source_symbol=symbols[left_index],
+                target_symbol=symbols[right_index],
+                snapshot_time=snapshot_time,
+                weight=score,
+                raw_score=score,
+                support_points=len(return_window),
             )
-
-    if top_k_per_symbol <= 0:
-        return candidates
-
-    symbol_edges: dict[str, list[GraphEdge]] = defaultdict(list)
-    for edge in candidates:
-        symbol_edges[edge.source_symbol].append(edge)
-        symbol_edges[edge.target_symbol].append(edge)
-
-    selected_keys: set[tuple[str, str]] = set()
-    for symbol, edges in symbol_edges.items():
-        del symbol
-        top_edges = sorted(edges, key=lambda item: item.weight, reverse=True)[:top_k_per_symbol]
-        for edge in top_edges:
-            selected_keys.add(tuple(sorted((edge.source_symbol, edge.target_symbol))))
-
-    return [
-        edge
-        for edge in candidates
-        if tuple(sorted((edge.source_symbol, edge.target_symbol))) in selected_keys
-    ]
+        )
+    return edges

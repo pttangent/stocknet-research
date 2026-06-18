@@ -1,12 +1,17 @@
 from __future__ import annotations
 
-from itertools import combinations
-
 import pandas as pd
 
 from stocknetv2.domain.graph.edge import GraphEdge
-from stocknetv2.domain.graph.edge_filter import keep_top_k_per_symbol
-from stocknetv2.domain.graph.series_utils import build_symbol_series, safe_correlation, select_time_window
+from stocknetv2.domain.graph.series_utils import (
+    build_pivot_matrix,
+    compute_above_threshold_ratio,
+    compute_overlap_counts,
+    compute_pairwise_correlation_matrix,
+    select_topk_pair_indices,
+)
+
+ACTIVITY_LAYER_LOOKBACK_MINUTES = 60
 
 
 def build_volume_expansion_edges(
@@ -17,11 +22,15 @@ def build_volume_expansion_edges(
     threshold: float,
     top_k_per_symbol: int,
 ) -> list[GraphEdge]:
-    window = select_time_window(feature_frame, snapshot_time=snapshot_time)
-    return _build_activity_edges(
-        window=window,
-        snapshot_time=snapshot_time,
+    value_matrix = build_pivot_matrix(
+        feature_frame,
         value_column="volume_z_12",
+        snapshot_time=snapshot_time,
+        minutes=ACTIVITY_LAYER_LOOKBACK_MINUTES,
+    )
+    return _build_activity_edges(
+        value_matrix=value_matrix,
+        snapshot_time=snapshot_time,
         graph_layer="volume_expansion_graph",
         edge_type="volume_expansion",
         min_score=min_score,
@@ -32,40 +41,44 @@ def build_volume_expansion_edges(
 
 def _build_activity_edges(
     *,
-    window: pd.DataFrame,
+    value_matrix: pd.DataFrame,
     snapshot_time: pd.Timestamp,
-    value_column: str,
     graph_layer: str,
     edge_type: str,
     min_score: float,
     threshold: float,
     top_k_per_symbol: int,
 ) -> list[GraphEdge]:
-    if window.empty or value_column not in window.columns:
+    if value_matrix.empty:
         return []
+    active_columns = value_matrix.columns[(value_matrix > threshold).any(axis=0)]
+    if len(active_columns) < 2:
+        return []
+    value_matrix = value_matrix.loc[:, active_columns].copy()
+
+    correlation_matrix = compute_pairwise_correlation_matrix(value_matrix)
+    co_expansion_matrix = compute_above_threshold_ratio(value_matrix, threshold)
+    score_matrix = 0.5 * correlation_matrix + 0.5 * co_expansion_matrix
+    overlap_counts = compute_overlap_counts(value_matrix)
+    symbols = value_matrix.columns.tolist()
 
     edges: list[GraphEdge] = []
-    for left_symbol, right_symbol in combinations(sorted(window["symbol"].unique()), 2):
-        left = build_symbol_series(window, symbol=left_symbol, value_column=value_column)
-        right = build_symbol_series(window, symbol=right_symbol, value_column=value_column)
-        joined = pd.DataFrame({"left": left, "right": right}).dropna()
-        if joined.empty:
-            continue
-        correlation = safe_correlation(joined["left"], joined["right"])
-        co_expansion = float(((joined["left"] > threshold) & (joined["right"] > threshold)).sum() / len(joined))
-        score = 0.5 * correlation + 0.5 * co_expansion
-        if score < min_score:
-            continue
+    for left_index, right_index in select_topk_pair_indices(
+        score_matrix,
+        min_score=min_score,
+        top_k_per_symbol=top_k_per_symbol,
+    ):
+        score = float(score_matrix[left_index, right_index])
         edges.append(
             GraphEdge(
                 graph_layer=graph_layer,
                 edge_type=edge_type,
-                source_symbol=left_symbol,
-                target_symbol=right_symbol,
+                source_symbol=symbols[left_index],
+                target_symbol=symbols[right_index],
                 snapshot_time=snapshot_time,
                 weight=score,
                 raw_score=score,
-                support_points=len(joined),
+                support_points=int(overlap_counts[left_index, right_index]),
             )
         )
-    return keep_top_k_per_symbol(edges, top_k_per_symbol)
+    return edges

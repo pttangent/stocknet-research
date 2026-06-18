@@ -74,3 +74,66 @@ def test_market_read_repository_returns_empty_optional_frames_when_missing(tmp_p
     assert not inputs.bars_5m.empty
     assert inputs.trade_flow_1m.empty
     assert inputs.features_1m.empty
+
+
+def test_market_read_repository_builds_features_from_raw_bars_when_partition_missing(tmp_path):
+    trade_date = "2026-01-02"
+    timestamps = [
+        datetime(2026, 1, 2, 14, 31, tzinfo=UTC),
+        datetime(2026, 1, 2, 14, 32, tzinfo=UTC),
+        datetime(2026, 1, 2, 14, 33, tzinfo=UTC),
+        datetime(2026, 1, 2, 14, 34, tzinfo=UTC),
+    ]
+    bars_5m = pd.DataFrame(
+        {
+            "timestamp": [datetime(2026, 1, 2, 14, 35, tzinfo=UTC)],
+            "symbol": ["AAA"],
+            "close": [10.4],
+        }
+    )
+    bars_1m = pd.DataFrame(
+        {
+            "symbol": ["AAA"] * 4,
+            "timestamp": timestamps,
+            "bar_end": [timestamp + pd.Timedelta(minutes=1) for timestamp in timestamps],
+            "open": [10.0, 10.1, 10.2, 10.3],
+            "high": [10.1, 10.2, 10.3, 10.4],
+            "low": [9.9, 10.0, 10.1, 10.2],
+            "close": [10.0, 10.1, 10.2, 10.4],
+            "volume": [100.0, 110.0, 125.0, 160.0],
+            "dollar_volume": [1000.0, 1111.0, 1275.0, 1664.0],
+            "vwap": [10.0, 10.1, 10.2, 10.4],
+            "exchange": ["XNYS"] * 4,
+            "bar_type": [1] * 4,
+            "sequence": [1, 2, 3, 4],
+            "source": ["unit-test"] * 4,
+        }
+    )
+    trade_flow_1m = pd.DataFrame(
+        {
+            "ticker": ["AAA"] * 4,
+            "minute": timestamps,
+            "trade_count": [10.0, 12.0, 14.0, 20.0],
+            "volume": [100.0, 110.0, 125.0, 160.0],
+            "dollar_volume": [1000.0, 1111.0, 1275.0, 1664.0],
+            "imbalance_proxy": [0.10, 0.20, 0.30, 0.60],
+            "large_trade_dollar_volume": [100.0, 150.0, 200.0, 500.0],
+        }
+    )
+
+    _write_partition(tmp_path, f"bars_5m/date={trade_date}", "bars_5m.parquet", bars_5m)
+    _write_partition(tmp_path, f"raw_1m/date={trade_date}", "bars_1m.parquet", bars_1m)
+    _write_partition(tmp_path, f"trade_flow_1m/date={trade_date}", "trade_flow_1m.parquet", trade_flow_1m)
+
+    repository = MarketReadRepository(LegacySourceLayout(data_root=tmp_path))
+    inputs = repository.load_trade_date_inputs(trade_date)
+
+    assert list(inputs.features_1m["symbol"]) == ["AAA"] * 4
+    assert "ret_1m" in inputs.features_1m.columns
+    assert "volume_z_12" in inputs.features_1m.columns
+    assert "imbalance_z" in inputs.features_1m.columns
+    assert "large_trade_ratio_z" in inputs.features_1m.columns
+    assert "flow_impulse_score" in inputs.features_1m.columns
+    assert inputs.trade_flow_1m["symbol"].tolist() == ["AAA"] * 4
+    assert inputs.trade_flow_1m["timestamp"].tolist() == timestamps
+    assert "generated_features_1m" in inputs.data_version

@@ -99,7 +99,7 @@ class LayerExecutionService:
             frame = inputs.features_1m.merge(
                 inputs.trade_flow_1m,
                 on=["timestamp", "symbol"],
-                how="outer",
+                how="left",
                 suffixes=("", "_flow"),
             )
 
@@ -109,6 +109,9 @@ class LayerExecutionService:
             if source_column in frame.columns and target_column in frame.columns:
                 frame[target_column] = frame[target_column].fillna(frame[source_column])
                 frame = frame.drop(columns=[source_column])
+        if not inputs.bars_5m.empty and "symbol" in inputs.bars_5m.columns and "symbol" in frame.columns:
+            allowed_symbols = set(inputs.bars_5m["symbol"].dropna().astype(str).unique().tolist())
+            frame = frame[frame["symbol"].astype(str).isin(allowed_symbols)].copy()
         return frame.sort_values(["timestamp", "symbol"]).reset_index(drop=True)
 
     @staticmethod

@@ -126,3 +126,50 @@ def test_orchestrator_persists_layer_community_and_consensus_outputs():
     assert membership_count >= 2
     assert theme_count >= 1
     assert theme_membership_count >= 2
+
+
+def test_orchestrator_can_run_graph_build_only_mode():
+    connection = duckdb.connect(":memory:")
+    SchemaManager(connection).initialize()
+
+    orchestrator = ThemeDiscoveryOrchestrator(
+        market_repository=LayeredMarketReadRepository(),
+        audit_repository=AuditRepository(connection),
+        snapshot_clock=OneSnapshotClock(),
+        layer_execution_service=LayerExecutionService(),
+        graph_write_repository=GraphWriteRepository(connection),
+        consensus_service=ConsensusService(),
+        theme_write_repository=ThemeWriteRepository(connection),
+    )
+    config = ThemeDiscoveryRunConfig(
+        run_id="run_graph_only_test",
+        run_name="Graph only persistence test",
+        date_start="2026-01-02",
+        date_end="2026-01-02",
+        config_id="config_graph_only_test",
+        config_name="Graph only baseline",
+        config_scope="t1",
+        config_version="v1",
+        code_commit="graphonly123",
+        graph_build_only=True,
+    )
+
+    summary = orchestrator.run(config)
+
+    assert summary.snapshot_count == 1
+    assert connection.execute(
+        "SELECT COUNT(*) FROM graph_edges_thresholded WHERE run_id = ?",
+        ["run_graph_only_test"],
+    ).fetchone()[0] >= 6
+    assert connection.execute(
+        "SELECT COUNT(*) FROM layer_community WHERE run_id = ?",
+        ["run_graph_only_test"],
+    ).fetchone()[0] >= 1
+    assert connection.execute(
+        "SELECT COUNT(*) FROM consensus_theme_candidate WHERE run_id = ?",
+        ["run_graph_only_test"],
+    ).fetchone()[0] == 0
+    assert connection.execute(
+        "SELECT COUNT(*) FROM frontend_snapshot_cache WHERE run_id = ?",
+        ["run_graph_only_test"],
+    ).fetchone()[0] == 0
