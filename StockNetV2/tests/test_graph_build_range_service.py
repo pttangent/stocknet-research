@@ -7,6 +7,7 @@ import duckdb
 
 from stocknetv2.application.services.graph_build_range_service import (
     GraphBuildRangeConfig,
+    GraphBuildShardFailure,
     GraphBuildRangeService,
     GraphBuildShardResult,
 )
@@ -166,3 +167,46 @@ def test_graph_build_range_service_dispatches_dates_via_executor(tmp_path):
     service.run(config)
 
     assert submitted_trade_dates == ["2025-01-02", "2025-01-03"]
+
+
+def test_graph_build_range_service_returns_failure_records_when_shards_fail(tmp_path):
+    def failing_worker(task):
+        raise RuntimeError(f"boom:{task.trade_date}")
+
+    service = GraphBuildRangeService(
+        market_calendar=_StubMarketCalendar(),
+        shard_runner=failing_worker,
+        max_workers=1,
+    )
+    config = GraphBuildRangeConfig(
+        data_root=tmp_path,
+        output_database_path=tmp_path / "month.duckdb",
+        date_start="2025-01-02",
+        date_end="2025-01-03",
+        run_prefix="graph-build",
+        config_id="graph-build-config",
+        config_name="Graph build config",
+        config_version="v1",
+        code_commit="abc123",
+        continue_on_error=True,
+        keep_shards=True,
+    )
+
+    summary = service.run(config)
+
+    assert summary.processed_dates == []
+    assert summary.failure_count == 2
+    assert summary.failures == [
+        GraphBuildShardFailure(
+            trade_date="2025-01-02",
+            run_id="graph-build_2025-01-02",
+            error_type="RuntimeError",
+            error_message="boom:2025-01-02",
+        ),
+        GraphBuildShardFailure(
+            trade_date="2025-01-03",
+            run_id="graph-build_2025-01-03",
+            error_type="RuntimeError",
+            error_message="boom:2025-01-03",
+        ),
+    ]

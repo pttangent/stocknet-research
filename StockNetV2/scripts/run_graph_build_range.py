@@ -88,6 +88,21 @@ def main() -> int:
             flush=True,
         )
 
+    for failure in summary.failures:
+        print(
+            json.dumps(
+                {
+                    "status": "failed",
+                    "trade_date": failure.trade_date,
+                    "run_id": failure.run_id,
+                    "error_type": failure.error_type,
+                    "error": failure.error_message,
+                },
+                ensure_ascii=False,
+            ),
+            flush=True,
+        )
+
     print(
         json.dumps(
             {

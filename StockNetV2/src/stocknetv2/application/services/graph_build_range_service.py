@@ -67,9 +67,18 @@ class GraphBuildShardResult:
 
 
 @dataclass(frozen=True)
+class GraphBuildShardFailure:
+    trade_date: str
+    run_id: str
+    error_type: str
+    error_message: str
+
+
+@dataclass(frozen=True)
 class GraphBuildRangeSummary:
     processed_dates: list[str]
     shard_results: list[GraphBuildShardResult]
+    failures: list[GraphBuildShardFailure]
     failure_count: int
     elapsed_seconds: float
 
@@ -119,7 +128,7 @@ class GraphBuildRangeService:
         ]
 
         shard_results: list[GraphBuildShardResult] = []
-        failures: list[tuple[str, Exception]] = []
+        failures: list[GraphBuildShardFailure] = []
 
         try:
             if self._max_workers <= 1 or len(tasks) <= 1:
@@ -127,7 +136,14 @@ class GraphBuildRangeService:
                     try:
                         shard_results.append(self._shard_runner(task))
                     except Exception as exc:
-                        failures.append((task.trade_date, exc))
+                        failures.append(
+                            GraphBuildShardFailure(
+                                trade_date=task.trade_date,
+                                run_id=task.run_id,
+                                error_type=type(exc).__name__,
+                                error_message=str(exc),
+                            )
+                        )
                         if not config.continue_on_error:
                             raise
             else:
@@ -140,7 +156,14 @@ class GraphBuildRangeService:
                     try:
                         shard_results.append(future.result())
                     except Exception as exc:
-                        failures.append((task.trade_date, exc))
+                        failures.append(
+                            GraphBuildShardFailure(
+                                trade_date=task.trade_date,
+                                run_id=task.run_id,
+                                error_type=type(exc).__name__,
+                                error_message=str(exc),
+                            )
+                        )
                         if not config.continue_on_error:
                             raise
                 if hasattr(executor, "shutdown"):
@@ -152,6 +175,7 @@ class GraphBuildRangeService:
             return GraphBuildRangeSummary(
                 processed_dates=[result.trade_date for result in shard_results],
                 shard_results=sorted(shard_results, key=lambda result: result.trade_date),
+                failures=sorted(failures, key=lambda failure: failure.trade_date),
                 failure_count=len(failures),
                 elapsed_seconds=round(time.perf_counter() - started_at, 2),
             )
