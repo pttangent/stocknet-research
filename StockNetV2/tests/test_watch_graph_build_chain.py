@@ -38,3 +38,15 @@ def test_resolve_full_history_trade_dates_uses_trade_flow_intersection(tmp_path:
     trade_dates = module._resolve_full_history_trade_dates(tmp_path)
 
     assert trade_dates == ["2025-01-02", "2025-01-03"]
+
+
+def test_build_python_process_probe_command_excludes_current_pid():
+    module = _load_watch_graph_build_chain_module()
+
+    command = module._build_python_process_probe_command(
+        command_token="full_market_graph_build_2025_01.duckdb",
+        exclude_pid=12345,
+    )
+
+    assert "$_.ProcessId -ne 12345" in command
+    assert "full_market_graph_build_2025_01.duckdb" in command

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 import subprocess
 import sys
 import time
@@ -147,12 +148,9 @@ def _git_head_sha(repository_root: Path) -> str:
 
 
 def _is_python_command_active(command_token: str) -> bool:
-    command = (
-        "Get-CimInstance Win32_Process | "
-        "Where-Object { $_.Name -eq 'python.exe' -and $_.CommandLine -like '*"
-        + command_token.replace("'", "''")
-        + "*' } | "
-        "Select-Object -First 1 -ExpandProperty ProcessId"
+    command = _build_python_process_probe_command(
+        command_token=command_token,
+        exclude_pid=os.getpid(),
     )
     result = subprocess.run(
         ["powershell", "-NoProfile", "-Command", command],
@@ -161,6 +159,18 @@ def _is_python_command_active(command_token: str) -> bool:
         check=True,
     )
     return bool(result.stdout.strip())
+
+
+def _build_python_process_probe_command(*, command_token: str, exclude_pid: int) -> str:
+    return (
+        "Get-CimInstance Win32_Process | "
+        "Where-Object { $_.Name -eq 'python.exe' "
+        f"-and $_.ProcessId -ne {exclude_pid} "
+        "-and $_.CommandLine -like '*"
+        + command_token.replace("'", "''")
+        + "*' } | "
+        "Select-Object -First 1 -ExpandProperty ProcessId"
+    )
 
 
 def _validate_graph_build_database(
