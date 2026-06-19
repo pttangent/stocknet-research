@@ -19,3 +19,9 @@
 ## Status
 
 This project is being bootstrapped from the approved T1 design on 2026-06-15.
+
+Current formal research baseline:
+
+- [evaluation_pack_2025_01_v2](/D:/DEV/stocknetwork/StockNet/StockNetV2/evaluation_pack_2025_01_v2) is the validated problem baseline artifact from commit `600b23d`.
+- It evaluates graph-build outputs from `cb4e44b72f22a1079d2745a1ff78e3a9c520af47`, not every newer candidate code change on the branch.
+- The active remediation roadmap is documented in [GRAPH_QUALITY_AND_FINANCIAL_MEANING_PLAN.md](/D:/DEV/stocknetwork/StockNet/StockNetV2/GRAPH_QUALITY_AND_FINANCIAL_MEANING_PLAN.md).

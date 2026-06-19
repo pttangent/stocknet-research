@@ -22,6 +22,33 @@ Not:
 
 `Graph Quality Validated`
 
+## Version Baseline
+
+### Formal baseline object
+
+- Formal monthly evaluation-pack artifact: `600b23d`
+- Graph-build commit under evaluation: `cb4e44b72f22a1079d2745a1ff78e3a9c520af47`
+- Evaluation-pack generator commit: `a14f4fd715088b809d763ab8b4cf2ef704bff740`
+
+The current pack statistics, giant-cluster findings, DTW saturation findings, and financial-meaning concerns in this folder are therefore conclusions about the `cb4e44b` graph-build outputs.
+
+### Current branch code is a candidate, not a validated result
+
+The current branch already contains candidate implementation changes in the codebase, including configuration and runtime hooks for items such as `weighted_leiden`, `min_overlap_points`, `candidate_top_k`, `reciprocal_top_k`, and `degree_cap`.
+
+Those code changes are not equivalent to a solved research problem.
+
+Until they pass:
+
+- full local regression tests
+- six-day qualification runs
+- old-vs-new structural comparison
+- financial calibration checks
+- rebuilt monthly pack validation
+- out-of-sample confirmation
+
+they must be treated as `candidate fix / unvalidated`, not as resolved findings.
+
 ## What Is Already Working
 
 - The pack has research-scale coverage: 20 trade dates, 1,560 snapshots, about 14.79 million edges, about 14.96 million community-member rows, and about 6.38 million snapshot-symbol features and labels.
@@ -116,6 +143,8 @@ Required follow-up:
 
 ## Recommended Next Sequence
 
+Use [GRAPH_QUALITY_AND_FINANCIAL_MEANING_PLAN.md](/D:/DEV/stocknetwork/StockNet/StockNetV2/GRAPH_QUALITY_AND_FINANCIAL_MEANING_PLAN.md) as the authoritative roadmap. The short sequence below is kept here only as a compact summary.
+
 ### P0: Fix before rerunning the full month
 
 1. Repair symbol metadata handling and exclude `UNKNOWN` from concentration logic.
@@ -168,3 +197,5 @@ This work was not wasted. It converted vague discomfort about graph quality into
 The evaluation pack should be treated as a durable research infrastructure artifact.
 
 The six graph layers themselves have not yet passed the structural, semantic, or time-causality checks required for production-grade theme discovery.
+
+Current candidate code may be moving in the right direction, but this assessment must not be retroactively rewritten as if those fixes had already been validated by the `2025_01_v2` pack.

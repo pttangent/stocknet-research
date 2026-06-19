@@ -6,9 +6,20 @@ Status: `Graph evaluation artifact ready for manual review`
 Quality gate: `Not sufficient by itself to approve theme discovery, lifecycle analysis, or backtesting`
 
 See `ASSESSMENT.md` if a month-specific research conclusion has been written.
+See [../GRAPH_QUALITY_AND_FINANCIAL_MEANING_PLAN.md](/D:/DEV/stocknetwork/StockNet/StockNetV2/GRAPH_QUALITY_AND_FINANCIAL_MEANING_PLAN.md) for the full remediation and qualification roadmap.
 
 This pack is designed for manual graph-quality and financial-meaning review of the first month.
 It does not depend on rerunning the full T1 theme pipeline; instead it reconstructs evaluation context from the monthly graph-build database plus the market database.
+
+## Version Baseline
+
+- Formal evaluation-pack artifact commit: `600b23d`
+- Graph-build commit under evaluation: `cb4e44b72f22a1079d2745a1ff78e3a9c520af47`
+- Evaluation-pack generator commit: `a14f4fd715088b809d763ab8b4cf2ef704bff740`
+
+This means the 14.79 million edges, DTW saturation observations, return-correlation giant communities, and related findings in this folder are the empirical baseline for the `cb4e44b` graph database.
+
+Later branch code may already contain candidate fixes such as DTW overlap checks, weighted-Leiden runtime changes, or revised return-correlation windows, but those code paths are not validated by this pack unless a newer qualification run and newer pack are generated from them.
 
 ## Start Here
 
