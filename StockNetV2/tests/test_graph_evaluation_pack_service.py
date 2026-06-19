@@ -6,6 +6,7 @@ from pathlib import Path
 import duckdb
 import pandas as pd
 
+from stocknetv2.application.services import graph_evaluation_pack_service as graph_pack_service
 from stocknetv2.application.services.graph_evaluation_pack_service import (
     GraphEvaluationPackConfig,
     build_graph_evaluation_pack,
@@ -441,6 +442,15 @@ def test_build_graph_evaluation_pack_exports_review_artifacts(tmp_path):
             date_start="2025-01-02",
             date_end="2025-01-02",
             benchmark_symbols=("SPY",),
+            generator_metadata={
+                "git_head": "pack123",
+                "git_branch": "test-branch",
+                "repo_worktree_dirty": False,
+                "relevant_worktree_dirty": False,
+                "dirty_paths": [],
+                "relevant_dirty_paths": [],
+                "generated_at_utc": "2026-06-19T00:00:00Z",
+            },
         )
     )
 
@@ -468,6 +478,10 @@ def test_build_graph_evaluation_pack_exports_review_artifacts(tmp_path):
     assert manifest["date_end"] == "2025-01-02"
     assert manifest["counts"]["edge_rows"] == 1
     assert manifest["counts"]["community_rows"] == 1
+    assert manifest["generator"]["git_head"] == "pack123"
+    assert manifest["generator"]["git_branch"] == "test-branch"
+    assert manifest["generator"]["relevant_worktree_dirty"] is False
+    assert manifest["artifacts"]["run_manifest"]["size_bytes"] > 0
 
     connection = duckdb.connect()
     assert connection.execute(
@@ -483,3 +497,36 @@ def test_build_graph_evaluation_pack_exports_review_artifacts(tmp_path):
         [str(output_dir / "market" / "symbol_forward_labels" / "*.parquet")],
     ).fetchone()[0] == 2
     connection.close()
+
+
+def test_resolve_generator_metadata_tolerates_output_dir_outside_repo(tmp_path, monkeypatch):
+    repo_root = tmp_path / "repo"
+    output_dir = tmp_path / "outside-pack"
+    repo_root.mkdir()
+    output_dir.mkdir()
+
+    def fake_git_output(cwd: Path, args: list[str]) -> str | None:
+        command = tuple(args)
+        if command == ("rev-parse", "--show-toplevel"):
+            return str(repo_root)
+        if command == ("rev-parse", "HEAD"):
+            return "head123"
+        if command == ("rev-parse", "--abbrev-ref", "HEAD"):
+            return "branch-x"
+        if command == ("status", "--porcelain=v1", "--untracked-files=all"):
+            return " M data/generated.parquet\n M src/real_code.py\n"
+        raise AssertionError(f"Unexpected git args: {args}")
+
+    monkeypatch.setattr(graph_pack_service, "_git_output", fake_git_output)
+
+    metadata = graph_pack_service._resolve_generator_metadata(
+        provided_metadata=None,
+        output_dir=output_dir,
+    )
+
+    assert metadata["git_head"] == "head123"
+    assert metadata["git_branch"] == "branch-x"
+    assert metadata["repo_worktree_dirty"] is True
+    assert metadata["relevant_worktree_dirty"] is True
+    assert metadata["dirty_paths"] == ["data/generated.parquet", "src/real_code.py"]
+    assert metadata["relevant_dirty_paths"] == ["src/real_code.py"]

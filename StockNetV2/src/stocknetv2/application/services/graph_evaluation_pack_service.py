@@ -3,9 +3,11 @@ from __future__ import annotations
 import json
 import os
 import shutil
+import subprocess
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Callable
+from typing import Any, Callable
 
 import duckdb
 import pandas as pd
@@ -21,6 +23,7 @@ class GraphEvaluationPackConfig:
     date_end: str | None = None
     benchmark_symbols: tuple[str, ...] = ("SPY", "QQQ", "IWM", "DIA")
     compare_graph_database_path: Path | str | None = None
+    generator_metadata: dict[str, Any] | None = None
 
 
 @dataclass(frozen=True)
@@ -677,6 +680,10 @@ def build_graph_evaluation_pack(
             compare_included=compare_graph_database_path is not None,
         )
         artifact_paths["run_manifest"] = output_dir / "run_manifest.json"
+        generator_metadata = _resolve_generator_metadata(
+            provided_metadata=config.generator_metadata,
+            output_dir=output_dir,
+        )
         _write_manifest(
             artifact_paths["run_manifest"],
             graph_database_path=graph_database_path,
@@ -692,6 +699,7 @@ def build_graph_evaluation_pack(
             artifact_paths=artifact_paths,
             code_commits=code_commits,
             layers=layers,
+            generator_metadata=generator_metadata,
         )
         logger("[7/8] Verifying artifact files.")
         for path in artifact_paths.values():
@@ -1044,8 +1052,56 @@ def _write_manifest(
     artifact_paths: dict[str, Path],
     code_commits: list[str],
     layers: list[str],
+    generator_metadata: dict[str, Any],
 ) -> None:
-    manifest = {
+    manifest = _build_manifest_payload(
+        graph_database_path=graph_database_path,
+        market_database_path=market_database_path,
+        metadata_csv_path=metadata_csv_path,
+        compare_graph_database_path=compare_graph_database_path,
+        output_dir=output_dir,
+        date_start=date_start,
+        date_end=date_end,
+        primary_benchmark=primary_benchmark,
+        benchmark_symbols=benchmark_symbols,
+        counts=counts,
+        artifact_paths=artifact_paths,
+        code_commits=code_commits,
+        layers=layers,
+        generator_metadata=generator_metadata,
+    )
+    manifest["artifacts"]["run_manifest"]["size_bytes"] = 0
+    for _ in range(3):
+        path.write_text(json.dumps(manifest, indent=2, ensure_ascii=False), encoding="utf-8")
+        actual_size = path.stat().st_size
+        if manifest["artifacts"]["run_manifest"]["size_bytes"] == actual_size:
+            break
+        manifest["artifacts"]["run_manifest"]["size_bytes"] = actual_size
+    path.write_text(json.dumps(manifest, indent=2, ensure_ascii=False), encoding="utf-8")
+
+
+def _attach_database(connection: duckdb.DuckDBPyConnection, alias: str, database_path: Path) -> None:
+    connection.execute(f"ATTACH '{_escape_sql_literal(str(database_path))}' AS {alias} (READ_ONLY)")
+
+
+def _build_manifest_payload(
+    *,
+    graph_database_path: Path,
+    market_database_path: Path,
+    metadata_csv_path: Path | None,
+    compare_graph_database_path: Path | None,
+    output_dir: Path,
+    date_start: str,
+    date_end: str,
+    primary_benchmark: str,
+    benchmark_symbols: tuple[str, ...],
+    counts: dict[str, int],
+    artifact_paths: dict[str, Path],
+    code_commits: list[str],
+    layers: list[str],
+    generator_metadata: dict[str, Any],
+) -> dict[str, Any]:
+    return {
         "date_start": date_start,
         "date_end": date_end,
         "primary_benchmark": primary_benchmark,
@@ -1053,6 +1109,7 @@ def _write_manifest(
         "counts": counts,
         "code_commits": code_commits,
         "layers": layers,
+        "generator": generator_metadata,
         "sources": {
             "graph_database_path": str(graph_database_path),
             "market_database_path": str(market_database_path),
@@ -1067,11 +1124,89 @@ def _write_manifest(
             for name, path_obj in sorted(artifact_paths.items())
         },
     }
-    path.write_text(json.dumps(manifest, indent=2, ensure_ascii=False), encoding="utf-8")
 
 
-def _attach_database(connection: duckdb.DuckDBPyConnection, alias: str, database_path: Path) -> None:
-    connection.execute(f"ATTACH '{_escape_sql_literal(str(database_path))}' AS {alias} (READ_ONLY)")
+def _resolve_generator_metadata(
+    *,
+    provided_metadata: dict[str, Any] | None,
+    output_dir: Path,
+) -> dict[str, Any]:
+    if provided_metadata is not None:
+        return dict(provided_metadata)
+
+    repo_root = _git_output(output_dir, ["rev-parse", "--show-toplevel"])
+    generated_at_utc = datetime.now(UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+    if repo_root is None:
+        return {
+            "git_head": None,
+            "git_branch": None,
+            "repo_root": None,
+            "repo_worktree_dirty": None,
+            "relevant_worktree_dirty": None,
+            "dirty_paths": [],
+            "relevant_dirty_paths": [],
+            "generated_at_utc": generated_at_utc,
+        }
+
+    repo_root_path = Path(repo_root)
+    git_head = _git_output(repo_root_path, ["rev-parse", "HEAD"])
+    git_branch = _git_output(repo_root_path, ["rev-parse", "--abbrev-ref", "HEAD"])
+    status_output = _git_output(repo_root_path, ["status", "--porcelain=v1", "--untracked-files=all"]) or ""
+    dirty_paths = _parse_git_status_paths(status_output)
+    output_prefix: str | None = None
+    try:
+        relative_output_dir = output_dir.resolve().relative_to(repo_root_path.resolve())
+    except ValueError:
+        relative_output_dir = None
+    if relative_output_dir is not None:
+        output_prefix = relative_output_dir.as_posix().rstrip("/") + "/"
+    excluded_prefixes = [
+        "data/",
+        "docs/superpowers/plans/",
+    ]
+    if output_prefix is not None:
+        excluded_prefixes.append(output_prefix)
+    relevant_dirty_paths = [
+        path
+        for path in dirty_paths
+        if not any(path == prefix.rstrip("/") or path.startswith(prefix) for prefix in excluded_prefixes)
+    ]
+    return {
+        "git_head": git_head,
+        "git_branch": git_branch,
+        "repo_root": str(repo_root_path),
+        "repo_worktree_dirty": bool(dirty_paths),
+        "relevant_worktree_dirty": bool(relevant_dirty_paths),
+        "dirty_paths": dirty_paths,
+        "relevant_dirty_paths": relevant_dirty_paths,
+        "generated_at_utc": generated_at_utc,
+    }
+
+
+def _git_output(cwd: Path, args: list[str]) -> str | None:
+    try:
+        completed = subprocess.run(
+            ["git", "-C", str(cwd), *args],
+            capture_output=True,
+            check=True,
+            text=True,
+            encoding="utf-8",
+        )
+    except Exception:
+        return None
+    return completed.stdout.strip() or None
+
+
+def _parse_git_status_paths(status_output: str) -> list[str]:
+    paths: list[str] = []
+    for line in status_output.splitlines():
+        if not line:
+            continue
+        path_text = line[3:].strip()
+        if " -> " in path_text:
+            path_text = path_text.split(" -> ", maxsplit=1)[1]
+        paths.append(path_text.replace("\\", "/"))
+    return paths
 
 
 def _export_symbol_snapshot_feature_shards(
