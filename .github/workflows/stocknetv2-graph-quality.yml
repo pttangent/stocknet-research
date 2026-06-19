@@ -1,0 +1,41 @@
+name: StockNetV2 graph quality
+
+on:
+  push:
+    branches:
+      - codex/theme-discovery-quality-lab-v2-foundation
+    paths:
+      - "StockNetV2/**"
+      - ".github/workflows/stocknetv2-graph-quality.yml"
+  pull_request:
+    paths:
+      - "StockNetV2/**"
+      - ".github/workflows/stocknetv2-graph-quality.yml"
+
+jobs:
+  targeted-graph-tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: StockNetV2
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: StockNetV2/pyproject.toml
+      - name: Install StockNetV2
+        run: python -m pip install --upgrade pip && python -m pip install -e . pytest
+      - name: Run graph quality regression tests
+        run: >-
+          python -m pytest
+          tests/test_dtw_similarity.py
+          tests/test_remaining_graph_layers.py
+          tests/test_return_corr_graph.py
+          tests/test_layer_execution_service.py
+          tests/test_community_and_consensus.py
+          tests/test_graph_build_range_service.py
+          tests/test_graph_evaluation_pack_service.py
+          -q
