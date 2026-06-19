@@ -1,12 +1,22 @@
 from __future__ import annotations
 
-from datetime import UTC, datetime
 from concurrent.futures import Future
+from datetime import UTC, datetime
 
 import pandas as pd
 
 from stocknetv2.application.services.layer_execution_service import LayerExecutionService
+from stocknetv2.domain.graph.layer_config import CommunityDetectionConfig, ThemeDiscoverySettings
 from stocknetv2.infrastructure.repositories.market_read_repository import TradeDateInputs
+
+
+def _test_settings() -> ThemeDiscoverySettings:
+    return ThemeDiscoverySettings(
+        layer_community_detection=CommunityDetectionConfig(
+            algorithm="connected_components",
+            fallback_algorithm="error",
+        )
+    )
 
 
 def _build_trade_date_inputs() -> TradeDateInputs:
@@ -17,30 +27,38 @@ def _build_trade_date_inputs() -> TradeDateInputs:
         datetime(2026, 1, 2, 14, 45, tzinfo=UTC),
         datetime(2026, 1, 2, 14, 50, tzinfo=UTC),
     ]
+    base = [float(index % 6) + 0.1 * index for index in range(20)]
+    returns = [0.001 * ((index % 5) - 2) + 0.0001 * index for index in range(20)]
 
     bars_5m = pd.DataFrame(
         {
             "timestamp": bars_timestamps * 3,
             "symbol": ["AAA"] * 4 + ["BBB"] * 4 + ["CCC"] * 4,
-            "close": [10.0, 10.1, 10.2, 10.3] + [20.0, 20.2, 20.4, 20.6] + [30.0, 30.3, 30.6, 30.9],
+            "close": [10.0, 10.1, 10.2, 10.3] + [20.0, 20.22, 20.39, 20.65] + [30.0, 30.1, 30.4, 30.2],
         }
     )
     features_1m = pd.DataFrame(
         {
             "timestamp": minute_timestamps * 3,
             "symbol": ["AAA"] * 20 + ["BBB"] * 20 + ["CCC"] * 20,
-            "ret_1m": [0.01] * 20 + [0.011] * 20 + [0.0105] * 20,
-            "volume_z_12": [2.0] * 20 + [2.1] * 20 + [2.05] * 20,
-            "large_trade_ratio_z": [2.2] * 20 + [2.25] * 20 + [2.3] * 20,
+            "ret_1m": returns + [value * 1.01 for value in returns] + list(reversed(returns)),
+            "volume_z_12": base + [value * 1.02 for value in base] + list(reversed(base)),
+            "large_trade_ratio_z": [value * 0.3 for value in base]
+            + [value * 0.303 for value in base]
+            + [value * 0.2 for value in reversed(base)],
         }
     )
     trade_flow_1m = pd.DataFrame(
         {
             "timestamp": minute_timestamps * 3,
             "symbol": ["AAA"] * 20 + ["BBB"] * 20 + ["CCC"] * 20,
-            "flow_impulse_score": [1.0] * 20 + [1.01] * 20 + [1.02] * 20,
-            "imbalance_z": [0.5] * 20 + [0.49] * 20 + [0.48] * 20,
-            "large_trade_ratio_z": [2.2] * 20 + [2.25] * 20 + [2.3] * 20,
+            "flow_impulse_score": base + [value * 1.01 for value in base] + list(reversed(base)),
+            "imbalance_z": [value * 0.2 for value in base]
+            + [value * 0.202 for value in base]
+            + [value * -0.1 for value in base],
+            "large_trade_ratio_z": [value * 0.3 for value in base]
+            + [value * 0.303 for value in base]
+            + [value * 0.2 for value in reversed(base)],
         }
     )
     return TradeDateInputs(
@@ -53,7 +71,7 @@ def _build_trade_date_inputs() -> TradeDateInputs:
 
 
 def test_layer_execution_service_builds_all_six_layer_outputs():
-    service = LayerExecutionService()
+    service = LayerExecutionService(settings=_test_settings())
     inputs = _build_trade_date_inputs()
 
     result = service.execute_for_snapshot(
@@ -75,6 +93,28 @@ def test_layer_execution_service_builds_all_six_layer_outputs():
     assert len(result.layer_edges["dtw_trade_flow_similarity_graph"]) >= 1
     assert len(result.layer_edges["volume_expansion_graph"]) >= 1
     assert len(result.layer_edges["large_trade_alignment_graph"]) >= 1
+
+
+def test_return_window_excludes_premarket_and_caps_regular_session_history():
+    timestamps = list(pd.date_range("2026-01-02T13:30:00Z", periods=30, freq="5min"))
+    bars = pd.DataFrame(
+        {
+            "timestamp": timestamps * 2,
+            "symbol": ["AAA"] * 30 + ["BBB"] * 30,
+            "close": [100.0 + index for index in range(30)] + [200.0 + 2 * index for index in range(30)],
+        }
+    )
+
+    window = LayerExecutionService._build_return_window(
+        bars,
+        pd.Timestamp("2026-01-02T15:30:00Z"),
+        session_open=pd.Timestamp("2026-01-02T14:30:00Z"),
+        lookback_bars=6,
+    )
+
+    assert len(window) == 6
+    assert window.index.min() > pd.Timestamp("2026-01-02T14:30:00Z")
+    assert window.index.max() <= pd.Timestamp("2026-01-02T15:30:00Z")
 
 
 class _InlineExecutor:
@@ -99,6 +139,7 @@ def test_layer_execution_service_can_dispatch_layers_through_executor():
     service = LayerExecutionService(
         parallel_workers=3,
         executor_factory=lambda max_workers: executor,
+        settings=_test_settings(),
     )
     inputs = _build_trade_date_inputs()
 
