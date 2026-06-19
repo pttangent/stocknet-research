@@ -6,12 +6,35 @@ import numpy as np
 import pandas as pd
 
 
-def select_time_window(frame: pd.DataFrame, *, snapshot_time: pd.Timestamp, minutes: int | None = None) -> pd.DataFrame:
-    window = frame[frame["timestamp"] <= snapshot_time].copy()
+def select_time_window(
+    frame: pd.DataFrame,
+    *,
+    snapshot_time: pd.Timestamp,
+    minutes: int | None = None,
+    availability_lag_minutes: int = 1,
+) -> pd.DataFrame:
+    """Select observations that were fully available at the decision time.
+
+    One-minute feature and trade-flow timestamps in the legacy data identify the
+    bucket start.  Unless an explicit ``available_time`` column is present, the
+    observation therefore becomes usable one minute later.  This prevents a
+    09:35 snapshot from consuming the unfinished 09:35-09:36 bucket.
+    """
+
+    if frame.empty or "timestamp" not in frame.columns:
+        return frame.iloc[0:0].copy()
+
+    timestamps = pd.to_datetime(frame["timestamp"])
+    if "available_time" in frame.columns:
+        available_times = pd.to_datetime(frame["available_time"])
+    else:
+        available_times = timestamps + pd.Timedelta(minutes=max(availability_lag_minutes, 0))
+
+    eligible = available_times <= snapshot_time
     if minutes is not None:
-        start = snapshot_time - pd.Timedelta(minutes=minutes - 1)
-        window = window[window["timestamp"] >= start].copy()
-    return window
+        window_start = snapshot_time - pd.Timedelta(minutes=minutes)
+        eligible &= available_times > window_start
+    return frame.loc[eligible].copy()
 
 
 def zscore_series(values: list[float]) -> list[float]:
@@ -21,10 +44,6 @@ def zscore_series(values: list[float]) -> list[float]:
     variance = sum((value - mean_value) ** 2 for value in values) / len(values)
     std_value = math.sqrt(variance)
     if std_value < 1e-12:
-        if mean_value > 0:
-            return [1.0 for _ in values]
-        if mean_value < 0:
-            return [-1.0 for _ in values]
         return [0.0 for _ in values]
     return [(value - mean_value) / std_value for value in values]
 
@@ -36,15 +55,7 @@ def safe_correlation(left: pd.Series, right: pd.Series) -> float:
 
     left_std = float(joined["left"].std(ddof=0))
     right_std = float(joined["right"].std(ddof=0))
-    if left_std < 1e-12 and right_std < 1e-12:
-        left_mean = float(joined["left"].mean())
-        right_mean = float(joined["right"].mean())
-        if left_mean == 0.0 and right_mean == 0.0:
-            return 1.0
-        if (left_mean > 0 and right_mean > 0) or (left_mean < 0 and right_mean < 0):
-            return 1.0
-        if (left_mean > 0 > right_mean) or (left_mean < 0 < right_mean):
-            return -1.0
+    if left_std < 1e-12 or right_std < 1e-12:
         return 0.0
 
     correlation = float(joined["left"].corr(joined["right"]))
@@ -76,8 +87,14 @@ def build_pivot_matrix(
     value_column: str,
     snapshot_time: pd.Timestamp,
     minutes: int | None = None,
+    availability_lag_minutes: int = 1,
 ) -> pd.DataFrame:
-    window = select_time_window(frame, snapshot_time=snapshot_time, minutes=minutes)
+    window = select_time_window(
+        frame,
+        snapshot_time=snapshot_time,
+        minutes=minutes,
+        availability_lag_minutes=availability_lag_minutes,
+    )
     if window.empty or value_column not in window.columns:
         return pd.DataFrame()
     return (
@@ -109,21 +126,7 @@ def compute_overlap_counts(matrix: pd.DataFrame) -> np.ndarray:
 
 
 def compute_same_direction_ratio(matrix: pd.DataFrame) -> np.ndarray:
-    if matrix.empty:
-        return np.zeros((0, 0), dtype=float)
-
-    values = matrix.to_numpy(dtype=float)
-    mask = ~np.isnan(values)
-    positive = ((values >= 0) & mask).astype(np.int32)
-    negative = ((values < 0) & mask).astype(np.int32)
-    same_direction = positive.T @ positive + negative.T @ negative
-    overlap = compute_overlap_counts(matrix)
-    return np.divide(
-        same_direction,
-        overlap,
-        out=np.zeros_like(same_direction, dtype=float),
-        where=overlap > 0,
-    )
+    return compute_conditional_same_direction_ratio(matrix, epsilon=0.0)
 
 
 def compute_joint_active_counts(matrix: pd.DataFrame, *, epsilon: float) -> np.ndarray:
@@ -175,40 +178,20 @@ def compute_pairwise_correlation_matrix(
     matrix: pd.DataFrame,
     *,
     min_periods: int = 2,
-    min_variance: float = 0.0,
+    min_variance: float = 1e-12,
 ) -> np.ndarray:
     if matrix.empty:
         return np.zeros((0, 0), dtype=float)
+
     correlation = matrix.corr(min_periods=min_periods).fillna(0.0).to_numpy(dtype=float).copy()
     values = matrix.to_numpy(dtype=float)
-    means = np.nanmean(values, axis=0)
     stds = np.nanstd(values, axis=0)
-    invalid_variance_mask = stds < min_variance if min_variance > 0 else np.zeros_like(stds, dtype=bool)
-    constant_mask = stds < 1e-12
-
+    variance_floor = max(float(min_variance), 1e-12)
+    invalid_variance_mask = stds < variance_floor
     if invalid_variance_mask.any():
         invalid_indices = np.where(invalid_variance_mask)[0]
         correlation[invalid_indices, :] = 0.0
         correlation[:, invalid_indices] = 0.0
-
-    if not constant_mask.any():
-        return correlation
-
-    constant_indices = np.where(constant_mask)[0]
-    for left_index in constant_indices:
-        for right_index in constant_indices:
-            if invalid_variance_mask[left_index] or invalid_variance_mask[right_index]:
-                continue
-            left_mean = float(means[left_index])
-            right_mean = float(means[right_index])
-            if left_mean == 0.0 and right_mean == 0.0:
-                correlation[left_index, right_index] = 1.0
-            elif (left_mean > 0 and right_mean > 0) or (left_mean < 0 and right_mean < 0):
-                correlation[left_index, right_index] = 1.0
-            elif (left_mean > 0 > right_mean) or (left_mean < 0 < right_mean):
-                correlation[left_index, right_index] = -1.0
-            else:
-                correlation[left_index, right_index] = 0.0
     return correlation
 
 
