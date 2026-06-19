@@ -28,6 +28,93 @@
     "return_corr_graph",
     "volume_expansion_graph"
   ],
+  "generator": {
+    "git_head": "a14f4fd715088b809d763ab8b4cf2ef704bff740",
+    "git_branch": "codex/theme-discovery-quality-lab-v2-foundation",
+    "repo_root": "D:\\DEV\\stocknetwork\\StockNet",
+    "repo_worktree_dirty": true,
+    "relevant_worktree_dirty": false,
+    "dirty_paths": [
+      "data/bars_15m/date=2026-06-09/bars_15m.parquet",
+      "data/bars_5m/date=2026-06-09/bars_5m.parquet",
+      "data/raw_1m/date=2026-06-09/bars_1m.parquet",
+      "data/stocknet_us.duckdb",
+      "docs/superpowers/plans/2026-06-19-graph-evaluation-pack.md"
+    ],
+    "relevant_dirty_paths": [],
+    "generated_at_utc": "2026-06-19T10:19:09Z"
+  },
+  "provenance": {
+    "graph_build_commits": [
+      "cb4e44b72f22a1079d2745a1ff78e3a9c520af47"
+    ],
+    "evaluation_pack_generator": {
+      "git_head": "a14f4fd715088b809d763ab8b4cf2ef704bff740",
+      "git_branch": "codex/theme-discovery-quality-lab-v2-foundation",
+      "repo_root": "D:\\DEV\\stocknetwork\\StockNet",
+      "repo_worktree_dirty": true,
+      "relevant_worktree_dirty": false,
+      "dirty_paths": [
+        "data/bars_15m/date=2026-06-09/bars_15m.parquet",
+        "data/bars_5m/date=2026-06-09/bars_5m.parquet",
+        "data/raw_1m/date=2026-06-09/bars_1m.parquet",
+        "data/stocknet_us.duckdb",
+        "docs/superpowers/plans/2026-06-19-graph-evaluation-pack.md"
+      ],
+      "relevant_dirty_paths": [],
+      "generated_at_utc": "2026-06-19T10:19:09Z"
+    },
+    "config": {
+      "date_start": "2025-01-02",
+      "date_end": "2025-01-31",
+      "primary_benchmark": "SPY",
+      "benchmark_symbols": [
+        "SPY",
+        "QQQ",
+        "IWM",
+        "DIA"
+      ],
+      "layers": [
+        "dtw_return_similarity_graph",
+        "dtw_trade_flow_similarity_graph",
+        "flow_alignment_graph",
+        "large_trade_alignment_graph",
+        "return_corr_graph",
+        "volume_expansion_graph"
+      ],
+      "compare_graph_database_path": "D:\\DEV\\stocknetwork\\StockNet\\StockNetV2\\var\\full_market_graph_build_2025_01.duckdb",
+      "sha256": "4a563ff9cff807228dea8a8b6a3740dad9dad2c2aa341ab5d7e6ef8db28e2e60"
+    },
+    "inputs": {
+      "graph_database": {
+        "path": "D:\\DEV\\stocknetwork\\StockNet\\StockNetV2\\var\\full_market_graph_build_2025_01_v2.duckdb",
+        "size_bytes": 1857302528,
+        "sha256": "03f1f78578e2de7c22be8847ad298c8e0039875518d885fa9131e0416211cdc6"
+      },
+      "market_database": {
+        "path": "D:\\DEV\\stocknetwork\\StockNet\\data\\stocknet_us.duckdb",
+        "size_bytes": 274432,
+        "sha256": "d919f5c5c1763bdc330d3372abd61a5229d0c630f94ae6221d30ab909c949af5"
+      },
+      "metadata_csv": {
+        "path": "D:\\DEV\\stocknetwork\\StockNet\\artifacts\\input_symbols.csv",
+        "size_bytes": 122313,
+        "sha256": "738c3720204bd00ba1ed8bb7798b9c1d54cb938bcb457524858579bc715d3d87"
+      },
+      "compare_graph_database": {
+        "path": "D:\\DEV\\stocknetwork\\StockNet\\StockNetV2\\var\\full_market_graph_build_2025_01.duckdb",
+        "size_bytes": 2053910528,
+        "sha256": "2c2fde8c288264305dae7cf8cd3d91b96ed31e9bf339728c54aa73857b3a08e9"
+      }
+    },
+    "dependency_versions": {
+      "python": "3.14.3",
+      "duckdb": "1.4.4",
+      "pandas": "3.0.1",
+      "platform": "Windows-11-10.0.26200-SP0",
+      "executable": "C:\\Python314\\python.exe"
+    }
+  },
   "sources": {
     "graph_database_path": "D:\\DEV\\stocknetwork\\StockNet\\StockNetV2\\var\\full_market_graph_build_2025_01_v2.duckdb",
     "market_database_path": "D:\\DEV\\stocknetwork\\StockNet\\data\\stocknet_us.duckdb",
@@ -37,7 +124,7 @@
   "artifacts": {
     "README": {
       "path": "README.md",
-      "size_bytes": 2808
+      "size_bytes": 3100
     },
     "all_edges": {
       "path": "graph\\all_edges",
@@ -49,11 +136,11 @@
     },
     "community_membership": {
       "path": "graph\\community_membership.parquet",
-      "size_bytes": 33620902
+      "size_bytes": 33813203
     },
     "community_metrics": {
       "path": "graph\\community_metrics.parquet",
-      "size_bytes": 4425439
+      "size_bytes": 4438986
     },
     "compare_layer_community_distribution": {
       "path": "compare_old_vs_new\\layer_community_distribution_compare.csv",
@@ -69,11 +156,11 @@
     },
     "node_layer_metrics": {
       "path": "graph\\node_layer_metrics",
-      "size_bytes": 346544756
+      "size_bytes": 347247188
     },
     "run_manifest": {
       "path": "run_manifest.json",
-      "size_bytes": 0
+      "size_bytes": 6241
     },
     "snapshot_layer_diagnostics": {
       "path": "graph\\snapshot_layer_diagnostics.csv",
@@ -81,7 +168,7 @@
     },
     "symbol_forward_labels": {
       "path": "market\\symbol_forward_labels",
-      "size_bytes": 128290959
+      "size_bytes": 128301924
     },
     "symbol_master": {
       "path": "market\\symbol_master.csv",
@@ -89,7 +176,7 @@
     },
     "symbol_snapshot_features": {
       "path": "market\\symbol_snapshot_features",
-      "size_bytes": 512345731
+      "size_bytes": 512369931
     }
   }
 }
