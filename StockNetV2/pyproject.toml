@@ -9,6 +9,9 @@ description = "Backend-first T1 theme discovery quality lab"
 requires-python = ">=3.11"
 dependencies = [
   "duckdb>=1.4.4",
+  "pandas>=2.2",
+  "python-igraph>=0.11",
+  "leidenalg>=0.10",
 ]
 
 [tool.setuptools]
