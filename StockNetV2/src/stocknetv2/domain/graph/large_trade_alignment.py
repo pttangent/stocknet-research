@@ -13,6 +13,8 @@ def build_large_trade_alignment_edges(
     min_score: float,
     threshold: float,
     top_k_per_symbol: int,
+    reciprocal_top_k: int | None = None,
+    degree_cap: int | None = None,
 ):
     value_matrix = build_pivot_matrix(
         feature_frame,
@@ -28,4 +30,6 @@ def build_large_trade_alignment_edges(
         min_score=min_score,
         threshold=threshold,
         top_k_per_symbol=top_k_per_symbol,
+        reciprocal_top_k=reciprocal_top_k,
+        degree_cap=degree_cap,
     )

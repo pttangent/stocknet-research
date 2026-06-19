@@ -1,0 +1,95 @@
+{
+  "date_start": "2025-01-02",
+  "date_end": "2025-01-31",
+  "primary_benchmark": "SPY",
+  "benchmark_symbols": [
+    "SPY",
+    "QQQ",
+    "IWM",
+    "DIA"
+  ],
+  "counts": {
+    "run_rows": 20,
+    "snapshot_rows": 1560,
+    "edge_rows": 14793303,
+    "community_rows": 149601,
+    "community_membership_rows": 10247185,
+    "active_symbol_snapshot_rows": 6379952,
+    "active_symbol_count": 5061
+  },
+  "code_commits": [
+    "cb4e44b72f22a1079d2745a1ff78e3a9c520af47"
+  ],
+  "layers": [
+    "dtw_return_similarity_graph",
+    "dtw_trade_flow_similarity_graph",
+    "flow_alignment_graph",
+    "large_trade_alignment_graph",
+    "return_corr_graph",
+    "volume_expansion_graph"
+  ],
+  "sources": {
+    "graph_database_path": "D:\\DEV\\stocknetwork\\StockNet\\StockNetV2\\var\\full_market_graph_build_2025_01_v2.duckdb",
+    "market_database_path": "D:\\DEV\\stocknetwork\\StockNet\\data\\stocknet_us.duckdb",
+    "metadata_csv_path": "D:\\DEV\\stocknetwork\\StockNet\\artifacts\\input_symbols.csv",
+    "compare_graph_database_path": "D:\\DEV\\stocknetwork\\StockNet\\StockNetV2\\var\\full_market_graph_build_2025_01.duckdb"
+  },
+  "artifacts": {
+    "README": {
+      "path": "README.md",
+      "size_bytes": 2808
+    },
+    "all_edges": {
+      "path": "graph\\all_edges",
+      "size_bytes": 230220656
+    },
+    "benchmark_series": {
+      "path": "market\\benchmark_series",
+      "size_bytes": 86080
+    },
+    "community_membership": {
+      "path": "graph\\community_membership.parquet",
+      "size_bytes": 33620902
+    },
+    "community_metrics": {
+      "path": "graph\\community_metrics.parquet",
+      "size_bytes": 4425439
+    },
+    "compare_layer_community_distribution": {
+      "path": "compare_old_vs_new\\layer_community_distribution_compare.csv",
+      "size_bytes": 852
+    },
+    "compare_layer_edge_summary": {
+      "path": "compare_old_vs_new\\layer_edge_summary_compare.csv",
+      "size_bytes": 488
+    },
+    "layer_review_candidates": {
+      "path": "graph\\layer_review_candidates.csv",
+      "size_bytes": 50400405
+    },
+    "node_layer_metrics": {
+      "path": "graph\\node_layer_metrics",
+      "size_bytes": 346544756
+    },
+    "run_manifest": {
+      "path": "run_manifest.json",
+      "size_bytes": 0
+    },
+    "snapshot_layer_diagnostics": {
+      "path": "graph\\snapshot_layer_diagnostics.csv",
+      "size_bytes": 2947995
+    },
+    "symbol_forward_labels": {
+      "path": "market\\symbol_forward_labels",
+      "size_bytes": 128290959
+    },
+    "symbol_master": {
+      "path": "market\\symbol_master.csv",
+      "size_bytes": 139078
+    },
+    "symbol_snapshot_features": {
+      "path": "market\\symbol_snapshot_features",
+      "size_bytes": 512345731
+    }
+  }
+}

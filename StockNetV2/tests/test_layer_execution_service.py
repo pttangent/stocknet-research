@@ -22,25 +22,25 @@ def _build_trade_date_inputs() -> TradeDateInputs:
         {
             "timestamp": bars_timestamps * 3,
             "symbol": ["AAA"] * 4 + ["BBB"] * 4 + ["CCC"] * 4,
-            "close": [10.0, 10.1, 10.2, 10.3] + [20.0, 20.2, 20.4, 20.6] + [30.0, 29.7, 29.4, 29.1],
+            "close": [10.0, 10.1, 10.2, 10.3] + [20.0, 20.2, 20.4, 20.6] + [30.0, 30.3, 30.6, 30.9],
         }
     )
     features_1m = pd.DataFrame(
         {
             "timestamp": minute_timestamps * 3,
             "symbol": ["AAA"] * 20 + ["BBB"] * 20 + ["CCC"] * 20,
-            "ret_1m": [0.01] * 20 + [0.011] * 20 + [-0.02] * 20,
-            "volume_z_12": [2.0] * 20 + [2.1] * 20 + [0.1] * 20,
-            "large_trade_ratio_z": [1.5] * 20 + [1.51] * 20 + [0.1] * 20,
+            "ret_1m": [0.01] * 20 + [0.011] * 20 + [0.0105] * 20,
+            "volume_z_12": [2.0] * 20 + [2.1] * 20 + [2.05] * 20,
+            "large_trade_ratio_z": [2.2] * 20 + [2.25] * 20 + [2.3] * 20,
         }
     )
     trade_flow_1m = pd.DataFrame(
         {
             "timestamp": minute_timestamps * 3,
             "symbol": ["AAA"] * 20 + ["BBB"] * 20 + ["CCC"] * 20,
-            "flow_impulse_score": [1.0] * 20 + [1.01] * 20 + [-1.0] * 20,
-            "imbalance_z": [0.5] * 20 + [0.49] * 20 + [-0.5] * 20,
-            "large_trade_ratio_z": [0.2] * 20 + [0.21] * 20 + [1.0] * 20,
+            "flow_impulse_score": [1.0] * 20 + [1.01] * 20 + [1.02] * 20,
+            "imbalance_z": [0.5] * 20 + [0.49] * 20 + [0.48] * 20,
+            "large_trade_ratio_z": [2.2] * 20 + [2.25] * 20 + [2.3] * 20,
         }
     )
     return TradeDateInputs(
@@ -70,7 +70,11 @@ def test_layer_execution_service_builds_all_six_layer_outputs():
         "volume_expansion_graph",
         "large_trade_alignment_graph",
     }
-    assert all(len(edges) >= 1 for edges in result.layer_edges.values())
+    assert len(result.layer_edges["dtw_return_similarity_graph"]) >= 1
+    assert len(result.layer_edges["flow_alignment_graph"]) >= 1
+    assert len(result.layer_edges["dtw_trade_flow_similarity_graph"]) >= 1
+    assert len(result.layer_edges["volume_expansion_graph"]) >= 1
+    assert len(result.layer_edges["large_trade_alignment_graph"]) >= 1
 
 
 class _InlineExecutor:

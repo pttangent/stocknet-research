@@ -2,8 +2,11 @@ from __future__ import annotations
 
 from stocknetv2.domain.community.consensus_matrix import build_consensus_matrix
 from stocknetv2.domain.community.detector import detect_communities_from_edges
+from stocknetv2.domain.graph.series_utils import select_topk_pair_indices
 from stocknetv2.domain.graph.edge import GraphEdge
+from stocknetv2.application.services.consensus_service import ConsensusService
 import pandas as pd
+from stocknetv2.domain.community.community import Community
 
 
 def _edge(source: str, target: str, weight: float, layer: str = "return_corr_graph") -> GraphEdge:
@@ -45,3 +48,54 @@ def test_build_consensus_matrix_aggregates_weighted_coassignment():
     assert matrix.loc["AAA", "BBB"] == 0.45
     assert matrix.loc["AAA", "CCC"] == 0.20
     assert matrix.loc["AAA", "DDD"] == 0.0
+
+
+def test_select_topk_pair_indices_can_require_reciprocal_neighbors():
+    matrix = pd.DataFrame(
+        [
+            [0.0, 0.95, 0.90],
+            [0.95, 0.0, 0.10],
+            [0.40, 0.89, 0.0],
+        ]
+    ).to_numpy()
+
+    pair_indices = select_topk_pair_indices(
+        matrix,
+        min_score=0.5,
+        top_k_per_symbol=2,
+        reciprocal_top_k=1,
+        degree_cap=6,
+    )
+
+    assert pair_indices == {(0, 1)}
+
+
+def test_detect_communities_marks_market_mode_for_large_universes():
+    edges = [_edge(f"S{i:03d}", f"S{i + 1:03d}", 0.9) for i in range(60)]
+
+    communities = detect_communities_from_edges(
+        edges,
+        min_members=2,
+        algorithm="connected_components",
+        universe_symbol_count=100,
+        market_mode_max_member_ratio=0.15,
+    )
+
+    assert len(communities) == 1
+    assert communities[0].is_market_mode is True
+
+
+def test_consensus_service_filters_single_family_clusters():
+    service = ConsensusService()
+
+    candidates = service.build_consensus_themes(
+        run_id="run_001",
+        snapshot_id="snapshot_001",
+        snapshot_time=pd.Timestamp("2026-01-02T14:35:00Z"),
+        layer_communities={
+            "flow_alignment_graph": [Community(members=["AAA", "BBB", "CCC"])],
+            "dtw_trade_flow_similarity_graph": [Community(members=["AAA", "BBB", "CCC"])],
+        },
+    )
+
+    assert candidates == []

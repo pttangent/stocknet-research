@@ -253,6 +253,7 @@ def _merge_shard_databases(output_database_path: Path, shard_paths: list[Path]) 
                     "input_lineage",
                     "graph_snapshot",
                     "graph_edge_summary",
+                    "graph_layer_diagnostic",
                     "graph_edges_thresholded",
                     "layer_community",
                     "layer_community_membership",

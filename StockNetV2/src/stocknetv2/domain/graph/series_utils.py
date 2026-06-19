@@ -126,6 +126,34 @@ def compute_same_direction_ratio(matrix: pd.DataFrame) -> np.ndarray:
     )
 
 
+def compute_joint_active_counts(matrix: pd.DataFrame, *, epsilon: float) -> np.ndarray:
+    if matrix.empty:
+        return np.zeros((0, 0), dtype=int)
+
+    values = matrix.to_numpy(dtype=float)
+    active = (np.abs(values) > epsilon) & ~np.isnan(values)
+    active_int = active.astype(np.int32)
+    return active_int.T @ active_int
+
+
+def compute_conditional_same_direction_ratio(matrix: pd.DataFrame, *, epsilon: float) -> np.ndarray:
+    if matrix.empty:
+        return np.zeros((0, 0), dtype=float)
+
+    values = matrix.to_numpy(dtype=float)
+    mask = ~np.isnan(values)
+    positive = ((values > epsilon) & mask).astype(np.int32)
+    negative = ((values < -epsilon) & mask).astype(np.int32)
+    same_direction = positive.T @ positive + negative.T @ negative
+    joint_active = compute_joint_active_counts(matrix, epsilon=epsilon)
+    return np.divide(
+        same_direction,
+        joint_active,
+        out=np.zeros_like(same_direction, dtype=float),
+        where=joint_active > 0,
+    )
+
+
 def compute_above_threshold_ratio(matrix: pd.DataFrame, threshold: float) -> np.ndarray:
     if matrix.empty:
         return np.zeros((0, 0), dtype=float)
@@ -143,14 +171,25 @@ def compute_above_threshold_ratio(matrix: pd.DataFrame, threshold: float) -> np.
     )
 
 
-def compute_pairwise_correlation_matrix(matrix: pd.DataFrame) -> np.ndarray:
+def compute_pairwise_correlation_matrix(
+    matrix: pd.DataFrame,
+    *,
+    min_periods: int = 2,
+    min_variance: float = 0.0,
+) -> np.ndarray:
     if matrix.empty:
         return np.zeros((0, 0), dtype=float)
-    correlation = matrix.corr(min_periods=2).fillna(0.0).to_numpy(dtype=float).copy()
+    correlation = matrix.corr(min_periods=min_periods).fillna(0.0).to_numpy(dtype=float).copy()
     values = matrix.to_numpy(dtype=float)
     means = np.nanmean(values, axis=0)
     stds = np.nanstd(values, axis=0)
+    invalid_variance_mask = stds < min_variance if min_variance > 0 else np.zeros_like(stds, dtype=bool)
     constant_mask = stds < 1e-12
+
+    if invalid_variance_mask.any():
+        invalid_indices = np.where(invalid_variance_mask)[0]
+        correlation[invalid_indices, :] = 0.0
+        correlation[:, invalid_indices] = 0.0
 
     if not constant_mask.any():
         return correlation
@@ -158,6 +197,8 @@ def compute_pairwise_correlation_matrix(matrix: pd.DataFrame) -> np.ndarray:
     constant_indices = np.where(constant_mask)[0]
     for left_index in constant_indices:
         for right_index in constant_indices:
+            if invalid_variance_mask[left_index] or invalid_variance_mask[right_index]:
+                continue
             left_mean = float(means[left_index])
             right_mean = float(means[right_index])
             if left_mean == 0.0 and right_mean == 0.0:
@@ -176,6 +217,8 @@ def select_topk_pair_indices(
     *,
     min_score: float,
     top_k_per_symbol: int,
+    reciprocal_top_k: int | None = None,
+    degree_cap: int | None = None,
 ) -> set[tuple[int, int]]:
     pair_indices: set[tuple[int, int]] = set()
     if score_matrix.size == 0:
@@ -184,21 +227,68 @@ def select_topk_pair_indices(
     size = score_matrix.shape[0]
     if top_k_per_symbol <= 0:
         rows, cols = np.where(np.triu(score_matrix, 1) >= min_score)
-        return {(int(row), int(col)) for row, col in zip(rows, cols, strict=False)}
+        pair_indices = {(int(row), int(col)) for row, col in zip(rows, cols, strict=False)}
+        return _apply_degree_cap(pair_indices, score_matrix, degree_cap=degree_cap)
+
+    reciprocal_limit = top_k_per_symbol if reciprocal_top_k is None else reciprocal_top_k
+    neighbor_lists: list[list[int]] = []
+    reciprocal_neighbor_sets: list[set[int]] = []
 
     for row_index in range(size):
         row = score_matrix[row_index].copy()
         row[row_index] = -np.inf
         candidate_count = min(top_k_per_symbol, max(size - 1, 0))
+        if not np.isfinite(row).any():
+            neighbor_lists.append([])
+            reciprocal_neighbor_sets.append(set())
+            continue
         if candidate_count <= 0:
+            neighbor_lists.append([])
+            reciprocal_neighbor_sets.append(set())
             continue
         top_indices = np.argpartition(row, -candidate_count)[-candidate_count:]
-        for column_index in top_indices:
-            score = float(row[column_index])
+        ranked_indices = sorted(
+            (int(index) for index in top_indices if float(row[index]) >= min_score),
+            key=lambda index: float(row[index]),
+            reverse=True,
+        )
+        neighbor_lists.append(ranked_indices)
+        reciprocal_neighbor_sets.append(set(ranked_indices[: max(reciprocal_limit, 0)]))
+
+    for row_index, ranked_indices in enumerate(neighbor_lists):
+        for column_index in ranked_indices:
+            score = float(score_matrix[row_index, column_index])
             if score < min_score:
+                continue
+            if reciprocal_limit > 0 and row_index not in reciprocal_neighbor_sets[column_index]:
                 continue
             left = min(row_index, int(column_index))
             right = max(row_index, int(column_index))
             if left != right:
                 pair_indices.add((left, right))
-    return pair_indices
+    return _apply_degree_cap(pair_indices, score_matrix, degree_cap=degree_cap)
+
+
+def _apply_degree_cap(
+    pair_indices: set[tuple[int, int]],
+    score_matrix: np.ndarray,
+    *,
+    degree_cap: int | None,
+) -> set[tuple[int, int]]:
+    if degree_cap is None or degree_cap <= 0 or len(pair_indices) <= 1:
+        return pair_indices
+
+    sorted_pairs = sorted(
+        pair_indices,
+        key=lambda pair: float(score_matrix[pair[0], pair[1]]),
+        reverse=True,
+    )
+    degrees = [0] * score_matrix.shape[0]
+    kept_pairs: set[tuple[int, int]] = set()
+    for left, right in sorted_pairs:
+        if degrees[left] >= degree_cap or degrees[right] >= degree_cap:
+            continue
+        kept_pairs.add((left, right))
+        degrees[left] += 1
+        degrees[right] += 1
+    return kept_pairs

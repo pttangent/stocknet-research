@@ -24,6 +24,7 @@ def test_schema_manager_creates_required_t1_tables(tmp_path):
         "input_lineage",
         "graph_snapshot",
         "graph_edge_summary",
+        "graph_layer_diagnostic",
         "graph_edges_thresholded",
         "layer_community",
         "layer_community_membership",
@@ -45,6 +46,9 @@ def test_schema_manager_includes_requested_schema_extensions(tmp_path):
 
     edge_columns = _column_names(connection, "graph_edges_thresholded")
     assert {"run_id", "trade_date"}.issubset(edge_columns)
+
+    diagnostic_columns = _column_names(connection, "graph_layer_diagnostic")
+    assert {"average_degree", "largest_component_ratio", "market_mode_member_ratio"}.issubset(diagnostic_columns)
 
     theme_columns = _column_names(connection, "consensus_theme_candidate")
     assert "theme_quality_breakdown_json" in theme_columns

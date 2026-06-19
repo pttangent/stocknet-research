@@ -21,6 +21,8 @@ def build_dtw_trade_flow_similarity_edges(
     session_open: pd.Timestamp,
     min_similarity: float,
     top_k_per_symbol: int,
+    reciprocal_top_k: int | None = None,
+    degree_cap: int | None = None,
 ) -> list[GraphEdge]:
     window_info = compute_effective_dtw_window(snapshot_time=snapshot_time, session_open=session_open)
     if not window_info["enabled"]:
@@ -62,6 +64,8 @@ def build_dtw_trade_flow_similarity_edges(
         coarse_matrix,
         min_score=-1.0,
         top_k_per_symbol=max(top_k_per_symbol * 4, top_k_per_symbol),
+        reciprocal_top_k=None,
+        degree_cap=None,
     ):
         left_symbol = symbols[left_index]
         right_symbol = symbols[right_index]
@@ -91,7 +95,12 @@ def build_dtw_trade_flow_similarity_edges(
                 effective_lookback_minutes=int(window_info["effective_lookback_minutes"]),
             )
         )
-    return keep_top_k_per_symbol(edges, top_k_per_symbol)
+    return keep_top_k_per_symbol(
+        edges,
+        top_k_per_symbol,
+        reciprocal_top_k=reciprocal_top_k,
+        degree_cap=degree_cap,
+    )
 
 
 def _combined_flow_similarity(

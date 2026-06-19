@@ -25,6 +25,7 @@ class GraphWriteRepository:
         config_id: str,
         layer_edges: dict[str, list[GraphEdge]],
         layer_communities: dict[str, list[Community]],
+        universe_symbol_count: int | None = None,
     ) -> None:
         for layer_name, edges in layer_edges.items():
             self._write_edge_summary(
@@ -49,6 +50,15 @@ class GraphWriteRepository:
                 layer_name=layer_name,
                 communities=layer_communities.get(layer_name, []),
                 edges=edges,
+            )
+            self._write_graph_diagnostic(
+                run_id=run_id,
+                snapshot_id=snapshot_id,
+                trade_date=trade_date,
+                layer_name=layer_name,
+                communities=layer_communities.get(layer_name, []),
+                edges=edges,
+                universe_symbol_count=universe_symbol_count,
             )
 
     def _write_edge_summary(
@@ -165,7 +175,7 @@ class GraphWriteRepository:
                     (sum(weights) / len(weights)) if weights else 0.0,
                     min(weights) if weights else 0.0,
                     max(weights) if weights else 0.0,
-                    "connected_components",
+                    community.method,
                 ],
             )
             for member_rank, symbol in enumerate(community.members, start=1):
@@ -189,6 +199,64 @@ class GraphWriteRepository:
                     ],
                 )
 
+    def _write_graph_diagnostic(
+        self,
+        *,
+        run_id: str,
+        snapshot_id: str,
+        trade_date: str,
+        layer_name: str,
+        communities: list[Community],
+        edges: list[GraphEdge],
+        universe_symbol_count: int | None,
+    ) -> None:
+        active_symbols = sorted({symbol for edge in edges for symbol in (edge.source_symbol, edge.target_symbol)})
+        degrees = _build_degree_counts(edges)
+        degree_values = list(degrees.values())
+        edge_weights = [edge.weight for edge in edges]
+        support_points = [float(edge.support_points) for edge in edges]
+        community_sizes = [len(community.members) for community in communities]
+        market_mode_members = sum(len(community.members) for community in communities if community.is_market_mode)
+        denominator = float(universe_symbol_count or len(active_symbols) or 1)
+        largest_component_ratio = (
+            max((len(community.members) for community in communities), default=0) / float(len(active_symbols) or 1)
+        )
+        self._connection.execute(
+            """
+            INSERT INTO graph_layer_diagnostic (
+                run_id, snapshot_id, trade_date, graph_layer, active_node_count, edge_count,
+                average_degree, degree_p50, degree_p95, max_degree, edge_score_p50, edge_score_p90,
+                support_points_p50, support_points_p90, connected_component_count, largest_component_ratio,
+                community_count, community_size_p50, community_size_p95, community_size_max,
+                market_mode_member_ratio, community_method
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            [
+                run_id,
+                snapshot_id,
+                trade_date,
+                layer_name,
+                len(active_symbols),
+                len(edges),
+                (sum(degree_values) / len(degree_values)) if degree_values else 0.0,
+                _percentile(degree_values, 0.5),
+                _percentile(degree_values, 0.95),
+                max(degree_values) if degree_values else 0,
+                _percentile(edge_weights, 0.5),
+                _percentile(edge_weights, 0.9),
+                _percentile(support_points, 0.5),
+                _percentile(support_points, 0.9),
+                len(communities),
+                largest_component_ratio,
+                len(communities),
+                _percentile(community_sizes, 0.5),
+                _percentile(community_sizes, 0.95),
+                max(community_sizes) if community_sizes else 0,
+                market_mode_members / denominator,
+                communities[0].method if communities else None,
+            ],
+        )
+
 
 def _median(values: list[float]) -> float:
     if not values:
@@ -206,3 +274,11 @@ def _percentile(values: list[float], percentile: float) -> float:
     ordered = sorted(values)
     index = min(int(round((len(ordered) - 1) * percentile)), len(ordered) - 1)
     return ordered[index]
+
+
+def _build_degree_counts(edges: list[GraphEdge]) -> dict[str, int]:
+    degrees: dict[str, int] = {}
+    for edge in edges:
+        degrees[edge.source_symbol] = degrees.get(edge.source_symbol, 0) + 1
+        degrees[edge.target_symbol] = degrees.get(edge.target_symbol, 0) + 1
+    return degrees

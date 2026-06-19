@@ -38,7 +38,13 @@ class ThemeQualityService:
             semantic_label = semantic_by_id.get(candidate.theme_instance_id)
             lifecycle_record = lifecycle_by_id.get(candidate.theme_instance_id)
 
-            structure_score = min(1.0, 0.7 * candidate.consensus_score + 0.3 * min(1.0, len(candidate.members) / 4.0))
+            size_penalty = min(1.0, 8.0 / max(len(candidate.members), 1))
+            family_bonus = min(1.0, candidate.distinct_family_count / 3.0)
+            market_mode_penalty = 0.25 if candidate.is_market_mode else 1.0
+            structure_score = min(
+                1.0,
+                candidate.structure_score * (0.85 + 0.15 * family_bonus) * market_mode_penalty,
+            )
             cross_layer_consensus_score = candidate.consensus_score
             flow_support_score = 1.0 if "flow_alignment_graph" in candidate.source_layers else 0.0
             dtw_flow_support_score = 1.0 if "dtw_trade_flow_similarity_graph" in candidate.source_layers else 0.0
@@ -66,6 +72,9 @@ class ThemeQualityService:
                     "weights": QUALITY_COMPONENT_WEIGHTS,
                     "component_scores": component_scores,
                     "member_count": len(candidate.members),
+                    "member_ratio": candidate.member_ratio,
+                    "distinct_family_count": candidate.distinct_family_count,
+                    "size_penalty": size_penalty,
                     "source_layers": candidate.source_layers,
                     "theme_quality_score": theme_quality_score,
                 }

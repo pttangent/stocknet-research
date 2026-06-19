@@ -18,6 +18,7 @@ from stocknetv2.application.services.semantic_service import SemanticService
 from stocknetv2.application.services.theme_flow_service import ThemeFlowService
 from stocknetv2.application.services.theme_quality_service import ThemeQualityService
 from stocknetv2.domain.snapshot.snapshot_clock import SnapshotClock
+from stocknetv2.domain.graph.layer_config import ThemeDiscoverySettings
 from stocknetv2.infrastructure.db.schema_manager import SchemaManager
 from stocknetv2.infrastructure.repositories.audit_repository import AuditRepository
 from stocknetv2.infrastructure.repositories.graph_write_repository import GraphWriteRepository
@@ -50,6 +51,7 @@ def run_theme_discovery(
 ):
     resolved_database_path = Path(database_path).expanduser().resolve()
     resolved_database_path.parent.mkdir(parents=True, exist_ok=True)
+    discovery_settings = ThemeDiscoverySettings()
 
     market_source = _build_market_source(
         legacy_data_root=legacy_data_root,
@@ -66,9 +68,12 @@ def run_theme_discovery(
             ),
             audit_repository=AuditRepository(connection),
             snapshot_clock=SnapshotClock(),
-            layer_execution_service=LayerExecutionService(parallel_workers=max(1, layer_workers)),
+            layer_execution_service=LayerExecutionService(
+                parallel_workers=max(1, layer_workers),
+                settings=discovery_settings,
+            ),
             graph_write_repository=GraphWriteRepository(connection),
-            consensus_service=ConsensusService(),
+            consensus_service=ConsensusService(config=discovery_settings.consensus),
             theme_write_repository=ThemeWriteRepository(connection),
             semantic_service=SemanticService(),
             lifecycle_service=LifecycleService(),
@@ -88,6 +93,7 @@ def run_theme_discovery(
             config_version=config_version,
             code_commit=code_commit,
             graph_build_only=graph_build_only,
+            discovery_settings=discovery_settings.to_dict(),
         )
         return orchestrator.run(config)
     finally:

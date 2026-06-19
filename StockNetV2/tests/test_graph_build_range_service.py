@@ -58,6 +58,58 @@ def _create_shard_database(path: Path, *, run_id: str, trade_date: str, config_i
         ]
     )
     audit_repository.complete_run(run_id=run_id, data_version=f"bars_5m:{trade_date}")
+    connection.execute(
+        """
+        INSERT INTO graph_layer_diagnostic (
+            run_id,
+            snapshot_id,
+            trade_date,
+            graph_layer,
+            active_node_count,
+            edge_count,
+            average_degree,
+            degree_p50,
+            degree_p95,
+            max_degree,
+            edge_score_p50,
+            edge_score_p90,
+            support_points_p50,
+            support_points_p90,
+            connected_component_count,
+            largest_component_ratio,
+            community_count,
+            community_size_p50,
+            community_size_p95,
+            community_size_max,
+            market_mode_member_ratio,
+            community_method
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        [
+            run_id,
+            f"{run_id}_{trade_date}_0930",
+            trade_date,
+            "return_corr_graph",
+            2,
+            1,
+            1.0,
+            1.0,
+            1.0,
+            1,
+            0.8,
+            0.8,
+            8.0,
+            8.0,
+            1,
+            1.0,
+            1,
+            2.0,
+            2.0,
+            2,
+            1.0,
+            "connected_components",
+        ],
+    )
     connection.close()
 
 
@@ -107,6 +159,7 @@ def test_graph_build_range_service_merges_day_shards_into_single_database(tmp_pa
     connection = duckdb.connect(str(output_database))
     assert connection.execute("SELECT COUNT(*) FROM theme_discovery_run").fetchone()[0] == 2
     assert connection.execute("SELECT COUNT(*) FROM graph_snapshot").fetchone()[0] == 2
+    assert connection.execute("SELECT COUNT(*) FROM graph_layer_diagnostic").fetchone()[0] == 2
     connection.close()
 
 

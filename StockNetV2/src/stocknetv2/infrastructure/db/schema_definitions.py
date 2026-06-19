@@ -71,6 +71,33 @@ TABLE_SCHEMAS: dict[str, str] = {
             PRIMARY KEY (snapshot_id, graph_layer)
         )
     """,
+    "graph_layer_diagnostic": """
+        CREATE TABLE IF NOT EXISTS graph_layer_diagnostic (
+            run_id TEXT NOT NULL,
+            snapshot_id TEXT NOT NULL,
+            trade_date DATE NOT NULL,
+            graph_layer TEXT NOT NULL,
+            active_node_count INTEGER NOT NULL,
+            edge_count INTEGER NOT NULL,
+            average_degree DOUBLE,
+            degree_p50 DOUBLE,
+            degree_p95 DOUBLE,
+            max_degree INTEGER,
+            edge_score_p50 DOUBLE,
+            edge_score_p90 DOUBLE,
+            support_points_p50 DOUBLE,
+            support_points_p90 DOUBLE,
+            connected_component_count INTEGER,
+            largest_component_ratio DOUBLE,
+            community_count INTEGER,
+            community_size_p50 DOUBLE,
+            community_size_p95 DOUBLE,
+            community_size_max INTEGER,
+            market_mode_member_ratio DOUBLE,
+            community_method TEXT,
+            PRIMARY KEY (snapshot_id, graph_layer)
+        )
+    """,
     "graph_edges_thresholded": """
         CREATE TABLE IF NOT EXISTS graph_edges_thresholded (
             run_id TEXT NOT NULL,

@@ -45,25 +45,25 @@ class LayeredMarketReadRepository:
             {
                 "timestamp": bars_timestamps * 3,
                 "symbol": ["AAA"] * 4 + ["BBB"] * 4 + ["CCC"] * 4,
-                "close": [10.0, 10.1, 10.2, 10.3] + [20.0, 20.2, 20.4, 20.6] + [30.0, 29.7, 29.4, 29.1],
+                "close": [10.0, 10.1, 10.2, 10.3] + [20.0, 20.2, 20.4, 20.6] + [30.0, 30.3, 30.6, 30.9],
             }
         )
         features_1m = pd.DataFrame(
             {
                 "timestamp": minute_timestamps * 3,
                 "symbol": ["AAA"] * 20 + ["BBB"] * 20 + ["CCC"] * 20,
-                "ret_1m": [0.01] * 20 + [0.011] * 20 + [-0.02] * 20,
-                "volume_z_12": [2.0] * 20 + [2.1] * 20 + [0.1] * 20,
-                "large_trade_ratio_z": [1.5] * 20 + [1.51] * 20 + [0.1] * 20,
+                "ret_1m": [0.01] * 20 + [0.011] * 20 + [0.0105] * 20,
+                "volume_z_12": [2.0] * 20 + [2.1] * 20 + [2.05] * 20,
+                "large_trade_ratio_z": [2.2] * 20 + [2.25] * 20 + [2.3] * 20,
             }
         )
         trade_flow_1m = pd.DataFrame(
             {
                 "timestamp": minute_timestamps * 3,
                 "symbol": ["AAA"] * 20 + ["BBB"] * 20 + ["CCC"] * 20,
-                "flow_impulse_score": [1.0] * 20 + [1.01] * 20 + [-1.0] * 20,
-                "imbalance_z": [0.5] * 20 + [0.49] * 20 + [-0.5] * 20,
-                "large_trade_ratio_z": [0.2] * 20 + [0.21] * 20 + [1.0] * 20,
+                "flow_impulse_score": [1.0] * 20 + [1.01] * 20 + [1.02] * 20,
+                "imbalance_z": [0.5] * 20 + [0.49] * 20 + [0.48] * 20,
+                "large_trade_ratio_z": [2.2] * 20 + [2.25] * 20 + [2.3] * 20,
             }
         )
         return TradeDateInputs(
@@ -106,6 +106,10 @@ def test_orchestrator_persists_layer_community_and_consensus_outputs():
 
     edge_count = connection.execute("SELECT COUNT(*) FROM graph_edges_thresholded WHERE run_id = ?", ["run_layers_test"]).fetchone()[0]
     summary_count = connection.execute("SELECT COUNT(*) FROM graph_edge_summary WHERE run_id = ?", ["run_layers_test"]).fetchone()[0]
+    diagnostic_count = connection.execute(
+        "SELECT COUNT(*) FROM graph_layer_diagnostic WHERE run_id = ?",
+        ["run_layers_test"],
+    ).fetchone()[0]
     community_count = connection.execute("SELECT COUNT(*) FROM layer_community WHERE run_id = ?", ["run_layers_test"]).fetchone()[0]
     membership_count = connection.execute(
         "SELECT COUNT(*) FROM layer_community_membership WHERE run_id = ?",
@@ -122,6 +126,7 @@ def test_orchestrator_persists_layer_community_and_consensus_outputs():
 
     assert edge_count >= 6
     assert summary_count == 6
+    assert diagnostic_count == 6
     assert community_count >= 1
     assert membership_count >= 2
     assert theme_count >= 1

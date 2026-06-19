@@ -8,6 +8,7 @@ from typing import Callable
 import numpy as np
 import pandas as pd
 
+from stocknetv2.domain.graph.layer_config import ThemeDiscoverySettings
 from stocknetv2.domain.community.community import Community
 from stocknetv2.domain.community.detector import detect_communities_from_edges
 from stocknetv2.domain.graph.edge import GraphEdge
@@ -38,10 +39,12 @@ class LayerExecutionService:
         *,
         parallel_workers: int = 1,
         executor_factory: Callable[[int], Executor] | None = None,
+        settings: ThemeDiscoverySettings | None = None,
     ) -> None:
         self._parallel_workers = max(1, parallel_workers)
         self._executor_factory = executor_factory or _build_process_pool_executor
         self._executor: Executor | None = None
+        self._settings = settings or ThemeDiscoverySettings()
 
     def execute_for_snapshot(
         self,
@@ -52,6 +55,7 @@ class LayerExecutionService:
     ) -> LayerExecutionResult:
         feature_frame = self._build_feature_frame(inputs)
         return_window = self._build_return_window(inputs.bars_5m, snapshot_time)
+        universe_symbol_count = int(feature_frame["symbol"].astype(str).nunique()) if "symbol" in feature_frame.columns else 0
 
         layer_edges = self._execute_layer_builders(
             feature_frame=feature_frame,
@@ -61,7 +65,15 @@ class LayerExecutionService:
         )
 
         layer_communities = {
-            layer_name: detect_communities_from_edges(edges, min_members=2)
+            layer_name: detect_communities_from_edges(
+                edges,
+                min_members=self._settings.layer_community_detection.min_members,
+                algorithm=self._settings.layer_community_detection.algorithm,
+                resolution=self._settings.layer_community_detection.resolution,
+                universe_symbol_count=universe_symbol_count,
+                market_mode_max_member_ratio=self._settings.layer_community_detection.market_mode_max_member_ratio,
+                fallback_algorithm=self._settings.layer_community_detection.fallback_algorithm,
+            )
             for layer_name, edges in layer_edges.items()
         }
         return LayerExecutionResult(layer_edges=layer_edges, layer_communities=layer_communities)
@@ -87,6 +99,7 @@ class LayerExecutionService:
                     return_window,
                     snapshot_time,
                     session_open,
+                    self._settings,
                 )
                 for layer_name in self._LAYER_NAMES
             }
@@ -100,6 +113,7 @@ class LayerExecutionService:
                 return_window,
                 snapshot_time,
                 session_open,
+                self._settings,
             )
             for layer_name in self._LAYER_NAMES
         }

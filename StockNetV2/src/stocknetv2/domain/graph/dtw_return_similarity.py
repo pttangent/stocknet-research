@@ -20,6 +20,8 @@ def build_dtw_return_similarity_edges(
     session_open: pd.Timestamp,
     min_similarity: float,
     top_k_per_symbol: int,
+    reciprocal_top_k: int | None = None,
+    degree_cap: int | None = None,
 ) -> list[GraphEdge]:
     window_info = compute_effective_dtw_window(snapshot_time=snapshot_time, session_open=session_open)
     if not window_info["enabled"]:
@@ -42,6 +44,8 @@ def build_dtw_return_similarity_edges(
         coarse_matrix,
         min_score=-1.0,
         top_k_per_symbol=max(top_k_per_symbol * 4, top_k_per_symbol),
+        reciprocal_top_k=None,
+        degree_cap=None,
     ):
         left_symbol = symbols[left_index]
         right_symbol = symbols[right_index]
@@ -65,13 +69,29 @@ def build_dtw_return_similarity_edges(
             )
         )
 
-    return _keep_top_k_with_exact_scores(edges, top_k_per_symbol)
+    return _keep_top_k_with_exact_scores(
+        edges,
+        top_k_per_symbol,
+        reciprocal_top_k=reciprocal_top_k,
+        degree_cap=degree_cap,
+    )
 
 
-def _keep_top_k_with_exact_scores(edges: list[GraphEdge], top_k_per_symbol: int) -> list[GraphEdge]:
-    if top_k_per_symbol <= 0:
+def _keep_top_k_with_exact_scores(
+    edges: list[GraphEdge],
+    top_k_per_symbol: int,
+    *,
+    reciprocal_top_k: int | None,
+    degree_cap: int | None,
+) -> list[GraphEdge]:
+    if top_k_per_symbol <= 0 and (degree_cap is None or degree_cap <= 0):
         return edges
 
     from stocknetv2.domain.graph.edge_filter import keep_top_k_per_symbol
 
-    return keep_top_k_per_symbol(edges, top_k_per_symbol)
+    return keep_top_k_per_symbol(
+        edges,
+        top_k_per_symbol,
+        reciprocal_top_k=reciprocal_top_k,
+        degree_cap=degree_cap,
+    )

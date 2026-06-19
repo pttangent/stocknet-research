@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Protocol
 
@@ -40,8 +40,9 @@ class ThemeDiscoveryRunConfig:
     code_commit: str
     frame_minutes: int = 5
     graph_build_only: bool = False
+    discovery_settings: dict[str, object] = field(default_factory=dict)
 
-    def to_config_json(self) -> dict[str, str | int]:
+    def to_config_json(self) -> dict[str, object]:
         return asdict(self)
 
 
@@ -155,6 +156,9 @@ class ThemeDiscoveryOrchestrator:
                             config_id=config.config_id,
                             layer_edges=layer_result.layer_edges,
                             layer_communities=layer_result.layer_communities,
+                            universe_symbol_count=int(inputs.bars_5m["symbol"].astype(str).nunique())
+                            if "symbol" in inputs.bars_5m.columns
+                            else None,
                         )
                         if config.graph_build_only:
                             continue

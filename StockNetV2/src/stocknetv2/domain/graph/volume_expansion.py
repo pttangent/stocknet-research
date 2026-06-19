@@ -21,6 +21,8 @@ def build_volume_expansion_edges(
     min_score: float,
     threshold: float,
     top_k_per_symbol: int,
+    reciprocal_top_k: int | None = None,
+    degree_cap: int | None = None,
 ) -> list[GraphEdge]:
     value_matrix = build_pivot_matrix(
         feature_frame,
@@ -36,6 +38,8 @@ def build_volume_expansion_edges(
         min_score=min_score,
         threshold=threshold,
         top_k_per_symbol=top_k_per_symbol,
+        reciprocal_top_k=reciprocal_top_k,
+        degree_cap=degree_cap,
     )
 
 
@@ -48,6 +52,8 @@ def _build_activity_edges(
     min_score: float,
     threshold: float,
     top_k_per_symbol: int,
+    reciprocal_top_k: int | None,
+    degree_cap: int | None,
 ) -> list[GraphEdge]:
     if value_matrix.empty:
         return []
@@ -67,6 +73,8 @@ def _build_activity_edges(
         score_matrix,
         min_score=min_score,
         top_k_per_symbol=top_k_per_symbol,
+        reciprocal_top_k=reciprocal_top_k,
+        degree_cap=degree_cap,
     ):
         score = float(score_matrix[left_index, right_index])
         edges.append(
