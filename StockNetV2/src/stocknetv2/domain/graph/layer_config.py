@@ -12,8 +12,9 @@ class LayerFilterConfig:
 
 @dataclass(frozen=True)
 class ReturnCorrelationConfig:
-    min_correlation: float = 0.65
+    min_correlation: float = 0.70
     min_overlap_points: int = 8
+    lookback_bars: int = 12
     filter: LayerFilterConfig = field(default_factory=LayerFilterConfig)
 
 
@@ -23,13 +24,15 @@ class FlowAlignmentConfig:
     min_score: float = 0.7
     min_joint_active_points: int = 8
     activity_epsilon: float = 0.05
-    min_variance: float = 0.0
+    min_variance: float = 1e-8
     filter: LayerFilterConfig = field(default_factory=LayerFilterConfig)
 
 
 @dataclass(frozen=True)
 class DTWLayerConfig:
     min_similarity: float = 0.9
+    min_overlap_points: int = 8
+    min_variance: float = 1e-8
     filter: LayerFilterConfig = field(default_factory=LayerFilterConfig)
 
 
@@ -46,7 +49,7 @@ class CommunityDetectionConfig:
     resolution: float = 0.9
     min_members: int = 2
     market_mode_max_member_ratio: float = 0.15
-    fallback_algorithm: str = "connected_components"
+    fallback_algorithm: str = "error"
 
 
 @dataclass(frozen=True)
