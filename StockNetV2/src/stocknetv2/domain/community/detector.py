@@ -8,9 +8,12 @@ from stocknetv2.domain.graph.edge import GraphEdge
 try:
     import igraph as ig
     import leidenalg
-except Exception:  # pragma: no cover - optional dependency fallback
+except Exception as exc:  # pragma: no cover - exercised through dependency guard tests
     ig = None
     leidenalg = None
+    _LEIDEN_IMPORT_ERROR: Exception | None = exc
+else:
+    _LEIDEN_IMPORT_ERROR = None
 
 
 def detect_communities_from_edges(
@@ -21,33 +24,52 @@ def detect_communities_from_edges(
     resolution: float = 1.0,
     universe_symbol_count: int | None = None,
     market_mode_max_member_ratio: float | None = None,
-    fallback_algorithm: str = "connected_components",
+    fallback_algorithm: str = "error",
 ) -> list[Community]:
+    """Detect communities using the explicitly requested algorithm.
+
+    A weighted-Leiden request is a research contract, not a best-effort hint.  We
+    therefore fail loudly when its runtime dependencies are unavailable instead
+    of silently replacing the requested partition with connected components.
+    The ``fallback_algorithm`` argument is retained for call-site compatibility,
+    but automatic fallback is intentionally disabled.
+    """
+
     if not edges:
         return []
     if algorithm == "weighted_leiden":
-        communities = _detect_weighted_leiden_communities(
+        _require_weighted_leiden_runtime()
+        return _detect_weighted_leiden_communities(
             edges,
             min_members=min_members,
             resolution=resolution,
             universe_symbol_count=universe_symbol_count,
             market_mode_max_member_ratio=market_mode_max_member_ratio,
         )
-        if communities:
-            return communities
-        if fallback_algorithm == "connected_components":
-            return _detect_connected_components(
-                edges,
-                min_members=min_members,
-                universe_symbol_count=universe_symbol_count,
-                market_mode_max_member_ratio=market_mode_max_member_ratio,
-            )
-    return _detect_connected_components(
-        edges,
-        min_members=min_members,
-        universe_symbol_count=universe_symbol_count,
-        market_mode_max_member_ratio=market_mode_max_member_ratio,
+    if algorithm == "connected_components":
+        return _detect_connected_components(
+            edges,
+            min_members=min_members,
+            universe_symbol_count=universe_symbol_count,
+            market_mode_max_member_ratio=market_mode_max_member_ratio,
+        )
+    raise ValueError(
+        f"Unsupported community detection algorithm: {algorithm!r}. "
+        "Use 'weighted_leiden' or 'connected_components'."
     )
+
+
+def _require_weighted_leiden_runtime() -> None:
+    if ig is not None and leidenalg is not None:
+        return
+    message = (
+        "weighted_leiden was requested, but python-igraph and leidenalg are not available. "
+        "Install the StockNetV2 project dependencies; automatic connected-components "
+        "fallback is disabled because it changes the research meaning of a community."
+    )
+    if _LEIDEN_IMPORT_ERROR is not None:
+        raise RuntimeError(message) from _LEIDEN_IMPORT_ERROR
+    raise RuntimeError(message)
 
 
 def _detect_weighted_leiden_communities(
@@ -58,8 +80,9 @@ def _detect_weighted_leiden_communities(
     universe_symbol_count: int | None,
     market_mode_max_member_ratio: float | None,
 ) -> list[Community]:
-    if ig is None or leidenalg is None:
-        return []
+    _require_weighted_leiden_runtime()
+    assert ig is not None
+    assert leidenalg is not None
 
     symbols = sorted({symbol for edge in edges for symbol in (edge.source_symbol, edge.target_symbol)})
     if len(symbols) < min_members:
