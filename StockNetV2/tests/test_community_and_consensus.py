@@ -1,12 +1,14 @@
 from __future__ import annotations
 
+import pandas as pd
+import pytest
+
+from stocknetv2.application.services.consensus_service import ConsensusService
+from stocknetv2.domain.community.community import Community
 from stocknetv2.domain.community.consensus_matrix import build_consensus_matrix
 from stocknetv2.domain.community.detector import detect_communities_from_edges
-from stocknetv2.domain.graph.series_utils import select_topk_pair_indices
 from stocknetv2.domain.graph.edge import GraphEdge
-from stocknetv2.application.services.consensus_service import ConsensusService
-import pandas as pd
-from stocknetv2.domain.community.community import Community
+from stocknetv2.domain.graph.series_utils import select_topk_pair_indices
 
 
 def _edge(source: str, target: str, weight: float, layer: str = "return_corr_graph") -> GraphEdge:
@@ -31,6 +33,22 @@ def test_detect_communities_from_edges_finds_connected_components():
     member_sets = [set(community.members) for community in communities]
     assert {"AAA", "BBB", "CCC"} in member_sets
     assert {"DDD", "EEE"} in member_sets
+
+
+def test_weighted_leiden_request_fails_instead_of_silently_falling_back(monkeypatch):
+    import stocknetv2.domain.community.detector as detector
+
+    monkeypatch.setattr(detector, "ig", None)
+    monkeypatch.setattr(detector, "leidenalg", None)
+    monkeypatch.setattr(detector, "_LEIDEN_IMPORT_ERROR", ImportError("missing test dependency"))
+
+    with pytest.raises(RuntimeError, match="automatic connected-components fallback is disabled"):
+        detector.detect_communities_from_edges(
+            [_edge("AAA", "BBB", 0.9)],
+            min_members=2,
+            algorithm="weighted_leiden",
+            fallback_algorithm="connected_components",
+        )
 
 
 def test_build_consensus_matrix_aggregates_weighted_coassignment():
