@@ -481,6 +481,11 @@ def test_build_graph_evaluation_pack_exports_review_artifacts(tmp_path):
     assert manifest["generator"]["git_head"] == "pack123"
     assert manifest["generator"]["git_branch"] == "test-branch"
     assert manifest["generator"]["relevant_worktree_dirty"] is False
+    assert manifest["provenance"]["graph_build_commits"] == ["abc123"]
+    assert manifest["provenance"]["evaluation_pack_generator"]["git_head"] == "pack123"
+    assert manifest["provenance"]["config"]["sha256"]
+    assert manifest["provenance"]["inputs"]["graph_database"]["sha256"]
+    assert manifest["provenance"]["dependency_versions"]["duckdb"] == duckdb.__version__
     assert manifest["artifacts"]["run_manifest"]["size_bytes"] > 0
 
     connection = duckdb.connect()

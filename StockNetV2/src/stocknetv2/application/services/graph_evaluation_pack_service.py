@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import os
+import platform
 import shutil
 import subprocess
+import sys
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -1101,6 +1104,14 @@ def _build_manifest_payload(
     layers: list[str],
     generator_metadata: dict[str, Any],
 ) -> dict[str, Any]:
+    config_payload = {
+        "date_start": date_start,
+        "date_end": date_end,
+        "primary_benchmark": primary_benchmark,
+        "benchmark_symbols": list(benchmark_symbols),
+        "layers": layers,
+        "compare_graph_database_path": str(compare_graph_database_path) if compare_graph_database_path is not None else None,
+    }
     return {
         "date_start": date_start,
         "date_end": date_end,
@@ -1110,6 +1121,21 @@ def _build_manifest_payload(
         "code_commits": code_commits,
         "layers": layers,
         "generator": generator_metadata,
+        "provenance": {
+            "graph_build_commits": code_commits,
+            "evaluation_pack_generator": generator_metadata,
+            "config": {
+                **config_payload,
+                "sha256": _sha256_json(config_payload),
+            },
+            "inputs": {
+                "graph_database": _file_provenance(graph_database_path),
+                "market_database": _file_provenance(market_database_path),
+                "metadata_csv": _file_provenance(metadata_csv_path),
+                "compare_graph_database": _file_provenance(compare_graph_database_path),
+            },
+            "dependency_versions": _dependency_versions(),
+        },
         "sources": {
             "graph_database_path": str(graph_database_path),
             "market_database_path": str(market_database_path),
@@ -1207,6 +1233,42 @@ def _parse_git_status_paths(status_output: str) -> list[str]:
             path_text = path_text.split(" -> ", maxsplit=1)[1]
         paths.append(path_text.replace("\\", "/"))
     return paths
+
+
+def _sha256_json(payload: dict[str, Any]) -> str:
+    encoded = json.dumps(payload, sort_keys=True, ensure_ascii=False).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def _file_provenance(path: Path | None) -> dict[str, Any] | None:
+    if path is None:
+        return None
+    return {
+        "path": str(path),
+        "size_bytes": path.stat().st_size if path.exists() else None,
+        "sha256": _sha256_file(path) if path.exists() else None,
+    }
+
+
+def _sha256_file(path: Path, chunk_size: int = 1024 * 1024) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        while True:
+            chunk = handle.read(chunk_size)
+            if not chunk:
+                break
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _dependency_versions() -> dict[str, str]:
+    return {
+        "python": platform.python_version(),
+        "duckdb": duckdb.__version__,
+        "pandas": pd.__version__,
+        "platform": platform.platform(),
+        "executable": sys.executable,
+    }
 
 
 def _export_symbol_snapshot_feature_shards(
