@@ -22,6 +22,8 @@ def build_dtw_return_similarity_edges(
     top_k_per_symbol: int,
     reciprocal_top_k: int | None = None,
     degree_cap: int | None = None,
+    min_overlap_points: int = 8,
+    min_variance: float = 1e-8,
 ) -> list[GraphEdge]:
     window_info = compute_effective_dtw_window(snapshot_time=snapshot_time, session_open=session_open)
     if not window_info["enabled"]:
@@ -37,8 +39,12 @@ def build_dtw_return_similarity_edges(
         return []
 
     normalized_matrix = zscore_frame_columns(matrix)
-    coarse_matrix = compute_pairwise_correlation_matrix(normalized_matrix)
-    symbols = normalized_matrix.columns.tolist()
+    coarse_matrix = compute_pairwise_correlation_matrix(
+        normalized_matrix,
+        min_periods=min_overlap_points,
+        min_variance=min_variance,
+    )
+    symbols = matrix.columns.tolist()
     edges: list[GraphEdge] = []
     for left_index, right_index in select_topk_pair_indices(
         coarse_matrix,
@@ -49,8 +55,17 @@ def build_dtw_return_similarity_edges(
     ):
         left_symbol = symbols[left_index]
         right_symbol = symbols[right_index]
-        left_values = normalized_matrix[left_symbol].dropna().astype(float).tolist()
-        right_values = normalized_matrix[right_symbol].dropna().astype(float).tolist()
+        aligned = matrix.loc[:, [left_symbol, right_symbol]].dropna()
+        if len(aligned) < min_overlap_points:
+            continue
+
+        left_std = float(aligned[left_symbol].std(ddof=0))
+        right_std = float(aligned[right_symbol].std(ddof=0))
+        if left_std < min_variance or right_std < min_variance:
+            continue
+
+        left_values = ((aligned[left_symbol] - aligned[left_symbol].mean()) / left_std).astype(float).tolist()
+        right_values = ((aligned[right_symbol] - aligned[right_symbol].mean()) / right_std).astype(float).tolist()
         score = dtw_similarity(left_values, right_values)
         if score < min_similarity:
             continue
@@ -63,7 +78,7 @@ def build_dtw_return_similarity_edges(
                 snapshot_time=snapshot_time,
                 weight=score,
                 raw_score=score,
-                support_points=min(len(left_values), len(right_values)),
+                support_points=len(aligned),
                 edge_confidence=float(window_info["window_confidence"]),
                 effective_lookback_minutes=int(window_info["effective_lookback_minutes"]),
             )
