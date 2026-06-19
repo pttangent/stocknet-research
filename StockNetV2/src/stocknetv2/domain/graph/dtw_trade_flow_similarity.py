@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import numpy as np
 import pandas as pd
 
 from stocknetv2.domain.graph.dtw_distance import dtw_similarity
@@ -23,40 +24,41 @@ def build_dtw_trade_flow_similarity_edges(
     top_k_per_symbol: int,
     reciprocal_top_k: int | None = None,
     degree_cap: int | None = None,
+    min_overlap_points: int = 8,
+    min_variance: float = 1e-8,
 ) -> list[GraphEdge]:
     window_info = compute_effective_dtw_window(snapshot_time=snapshot_time, session_open=session_open)
     if not window_info["enabled"]:
         return []
 
-    flow_matrix = _build_normalized_matrix(
+    minutes = int(window_info["effective_lookback_minutes"])
+    flow_matrix = _build_matrix(
         features_1m,
         value_column="flow_impulse_score",
         snapshot_time=snapshot_time,
-        minutes=int(window_info["effective_lookback_minutes"]),
+        minutes=minutes,
     )
-    imbalance_matrix = _build_normalized_matrix(
+    imbalance_matrix = _build_matrix(
         features_1m,
         value_column="imbalance_z",
         snapshot_time=snapshot_time,
-        minutes=int(window_info["effective_lookback_minutes"]),
+        minutes=minutes,
     )
-    large_trade_matrix = _build_normalized_matrix(
+    large_trade_matrix = _build_matrix(
         features_1m,
         value_column="large_trade_ratio_z",
         snapshot_time=snapshot_time,
-        minutes=int(window_info["effective_lookback_minutes"]),
+        minutes=minutes,
     )
-    if flow_matrix.empty and imbalance_matrix.empty and large_trade_matrix.empty:
+    matrices = (flow_matrix, imbalance_matrix, large_trade_matrix)
+    if all(matrix.empty for matrix in matrices):
         return []
 
-    reference_matrix = next(
-        matrix for matrix in (flow_matrix, imbalance_matrix, large_trade_matrix) if not matrix.empty
-    )
-    symbols = reference_matrix.columns.tolist()
+    symbols = sorted({str(symbol) for matrix in matrices for symbol in matrix.columns})
     coarse_matrix = (
-        0.50 * _coarse_similarity_matrix(flow_matrix, symbols)
-        + 0.30 * _coarse_similarity_matrix(imbalance_matrix, symbols)
-        + 0.20 * _coarse_similarity_matrix(large_trade_matrix, symbols)
+        0.50 * _coarse_similarity_matrix(flow_matrix, symbols, min_overlap_points, min_variance)
+        + 0.30 * _coarse_similarity_matrix(imbalance_matrix, symbols, min_overlap_points, min_variance)
+        + 0.20 * _coarse_similarity_matrix(large_trade_matrix, symbols, min_overlap_points, min_variance)
     )
 
     edges: list[GraphEdge] = []
@@ -69,14 +71,16 @@ def build_dtw_trade_flow_similarity_edges(
     ):
         left_symbol = symbols[left_index]
         right_symbol = symbols[right_index]
-        score = _combined_flow_similarity(
+        score, support_points, component_count = _combined_flow_similarity(
             left_symbol=left_symbol,
             right_symbol=right_symbol,
             flow_matrix=flow_matrix,
             imbalance_matrix=imbalance_matrix,
             large_trade_matrix=large_trade_matrix,
+            min_overlap_points=min_overlap_points,
+            min_variance=min_variance,
         )
-        if score < min_similarity:
+        if component_count < 2 or support_points < min_overlap_points or score < min_similarity:
             continue
         edges.append(
             GraphEdge(
@@ -87,12 +91,9 @@ def build_dtw_trade_flow_similarity_edges(
                 snapshot_time=snapshot_time,
                 weight=score,
                 raw_score=score,
-                support_points=min(
-                    _series_length(flow_matrix, left_symbol, right_symbol),
-                    _series_length(flow_matrix, right_symbol, left_symbol),
-                ),
+                support_points=support_points,
                 edge_confidence=float(window_info["window_confidence"]),
-                effective_lookback_minutes=int(window_info["effective_lookback_minutes"]),
+                effective_lookback_minutes=minutes,
             )
         )
     return keep_top_k_per_symbol(
@@ -110,50 +111,85 @@ def _combined_flow_similarity(
     flow_matrix: pd.DataFrame,
     imbalance_matrix: pd.DataFrame,
     large_trade_matrix: pd.DataFrame,
-) -> float:
-    sim_flow = _matrix_series_similarity(flow_matrix, left_symbol, right_symbol)
-    sim_imbalance = _matrix_series_similarity(imbalance_matrix, left_symbol, right_symbol)
-    sim_large_trade = _matrix_series_similarity(large_trade_matrix, left_symbol, right_symbol)
-    return 0.50 * sim_flow + 0.30 * sim_imbalance + 0.20 * sim_large_trade
+    min_overlap_points: int,
+    min_variance: float,
+) -> tuple[float, int, int]:
+    components: list[tuple[float, float, int]] = []
+    for component_weight, matrix in (
+        (0.50, flow_matrix),
+        (0.30, imbalance_matrix),
+        (0.20, large_trade_matrix),
+    ):
+        result = _matrix_series_similarity(
+            matrix,
+            left_symbol,
+            right_symbol,
+            min_overlap_points=min_overlap_points,
+            min_variance=min_variance,
+        )
+        if result is None:
+            continue
+        component_score, support_points = result
+        components.append((component_weight, component_score, support_points))
+
+    if not components:
+        return 0.0, 0, 0
+    total_weight = sum(weight for weight, _, _ in components)
+    score = sum(weight * component_score for weight, component_score, _ in components) / total_weight
+    support_points = min(support for _, _, support in components)
+    return float(score), int(support_points), len(components)
 
 
-def _matrix_series_similarity(matrix: pd.DataFrame, left_symbol: str, right_symbol: str) -> float:
+def _matrix_series_similarity(
+    matrix: pd.DataFrame,
+    left_symbol: str,
+    right_symbol: str,
+    *,
+    min_overlap_points: int,
+    min_variance: float,
+) -> tuple[float, int] | None:
     if matrix.empty or left_symbol not in matrix.columns or right_symbol not in matrix.columns:
-        return 0.0
-    left_values = matrix[left_symbol].dropna().astype(float).tolist()
-    right_values = matrix[right_symbol].dropna().astype(float).tolist()
-    return dtw_similarity(left_values, right_values)
+        return None
+    aligned = matrix.loc[:, [left_symbol, right_symbol]].dropna()
+    if len(aligned) < min_overlap_points:
+        return None
+
+    left_std = float(aligned[left_symbol].std(ddof=0))
+    right_std = float(aligned[right_symbol].std(ddof=0))
+    if left_std < min_variance or right_std < min_variance:
+        return None
+
+    left_values = ((aligned[left_symbol] - aligned[left_symbol].mean()) / left_std).astype(float).tolist()
+    right_values = ((aligned[right_symbol] - aligned[right_symbol].mean()) / right_std).astype(float).tolist()
+    return dtw_similarity(left_values, right_values), len(aligned)
 
 
-def _build_normalized_matrix(
+def _build_matrix(
     features_1m: pd.DataFrame,
     *,
     value_column: str,
     snapshot_time: pd.Timestamp,
     minutes: int,
 ) -> pd.DataFrame:
-    matrix = build_pivot_matrix(
+    return build_pivot_matrix(
         features_1m,
         value_column=value_column,
         snapshot_time=snapshot_time,
         minutes=minutes,
     )
-    return zscore_frame_columns(matrix)
 
 
-def _coarse_similarity_matrix(matrix: pd.DataFrame, symbols: list[str]) -> pd.DataFrame | pd.Series | object:
+def _coarse_similarity_matrix(
+    matrix: pd.DataFrame,
+    symbols: list[str],
+    min_overlap_points: int,
+    min_variance: float,
+) -> np.ndarray:
     if matrix.empty:
-        import numpy as np
-
         return np.zeros((len(symbols), len(symbols)), dtype=float)
-    aligned = matrix.reindex(columns=symbols)
-    return compute_pairwise_correlation_matrix(aligned)
-
-
-def _series_length(matrix: pd.DataFrame, left_symbol: str, right_symbol: str) -> int:
-    if matrix.empty or left_symbol not in matrix.columns or right_symbol not in matrix.columns:
-        return 0
-    return min(
-        int(matrix[left_symbol].notna().sum()),
-        int(matrix[right_symbol].notna().sum()),
+    aligned = zscore_frame_columns(matrix.reindex(columns=symbols))
+    return compute_pairwise_correlation_matrix(
+        aligned,
+        min_periods=min_overlap_points,
+        min_variance=min_variance,
     )
