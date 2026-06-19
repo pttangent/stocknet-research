@@ -535,3 +535,14 @@ def test_resolve_generator_metadata_tolerates_output_dir_outside_repo(tmp_path, 
     assert metadata["relevant_worktree_dirty"] is True
     assert metadata["dirty_paths"] == ["data/generated.parquet", "src/real_code.py"]
     assert metadata["relevant_dirty_paths"] == ["src/real_code.py"]
+
+
+def test_parse_git_status_paths_handles_leading_space_status_codes():
+    status_output = " M data/bars_15m/date=2026-06-09/bars_15m.parquet\n?? data/stocknet_us.duckdb\n"
+
+    paths = graph_pack_service._parse_git_status_paths(status_output)
+
+    assert paths == [
+        "data/bars_15m/date=2026-06-09/bars_15m.parquet",
+        "data/stocknet_us.duckdb",
+    ]
