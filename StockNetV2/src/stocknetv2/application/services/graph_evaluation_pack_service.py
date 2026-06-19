@@ -1220,7 +1220,8 @@ def _git_output(cwd: Path, args: list[str]) -> str | None:
         )
     except Exception:
         return None
-    return completed.stdout.strip() or None
+    output = completed.stdout.rstrip("\r\n")
+    return output or None
 
 
 def _parse_git_status_paths(status_output: str) -> list[str]:

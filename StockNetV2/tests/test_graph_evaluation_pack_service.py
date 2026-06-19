@@ -546,3 +546,18 @@ def test_parse_git_status_paths_handles_leading_space_status_codes():
         "data/bars_15m/date=2026-06-09/bars_15m.parquet",
         "data/stocknet_us.duckdb",
     ]
+
+
+def test_git_output_preserves_leading_spaces(monkeypatch):
+    class Completed:
+        def __init__(self, stdout: str) -> None:
+            self.stdout = stdout
+
+    def fake_run(*args, **kwargs):
+        return Completed(" M data/example.parquet\n")
+
+    monkeypatch.setattr(graph_pack_service.subprocess, "run", fake_run)
+
+    output = graph_pack_service._git_output(Path("D:/DEV/stocknetwork/StockNet"), ["status"])
+
+    assert output == " M data/example.parquet"
