@@ -54,7 +54,12 @@ class LayerExecutionService:
         session_open: pd.Timestamp,
     ) -> LayerExecutionResult:
         feature_frame = self._build_feature_frame(inputs)
-        return_window = self._build_return_window(inputs.bars_5m, snapshot_time)
+        return_window = self._build_return_window(
+            inputs.bars_5m,
+            snapshot_time,
+            session_open=session_open,
+            lookback_bars=self._settings.return_corr.lookback_bars,
+        )
         universe_symbol_count = int(feature_frame["symbol"].astype(str).nunique()) if "symbol" in feature_frame.columns else 0
 
         layer_edges = self._execute_layer_builders(
@@ -155,14 +160,30 @@ class LayerExecutionService:
         return frame.sort_values(["timestamp", "symbol"]).reset_index(drop=True)
 
     @staticmethod
-    def _build_return_window(bars_5m: pd.DataFrame, snapshot_time: pd.Timestamp) -> pd.DataFrame:
-        if bars_5m.empty:
+    def _build_return_window(
+        bars_5m: pd.DataFrame,
+        snapshot_time: pd.Timestamp,
+        *,
+        session_open: pd.Timestamp,
+        lookback_bars: int,
+    ) -> pd.DataFrame:
+        """Build a fixed regular-session rolling return window.
+
+        Five-minute bars are right-labelled, so a bar stamped at 09:35 is
+        available at the 09:35 snapshot.  Premarket observations are excluded,
+        and only the most recent configured number of return observations are
+        retained.
+        """
+
+        if bars_5m.empty or lookback_bars <= 0:
             return pd.DataFrame()
-        frame = bars_5m[bars_5m["timestamp"] <= snapshot_time].copy()
+        timestamps = pd.to_datetime(bars_5m["timestamp"])
+        frame = bars_5m.loc[(timestamps > session_open) & (timestamps <= snapshot_time)].copy()
         if frame.empty:
             return pd.DataFrame()
         pivot = frame.pivot(index="timestamp", columns="symbol", values="close").sort_index()
-        return np.log(pivot / pivot.shift(1)).dropna(how="all")
+        returns = np.log(pivot / pivot.shift(1)).dropna(how="all")
+        return returns.tail(lookback_bars)
 
 
 def _build_process_pool_executor(max_workers: int) -> ProcessPoolExecutor:
