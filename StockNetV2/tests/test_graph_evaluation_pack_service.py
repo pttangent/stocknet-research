@@ -474,10 +474,13 @@ def test_build_graph_evaluation_pack_exports_review_artifacts(tmp_path):
         assert path.exists(), path
 
     manifest = json.loads((output_dir / "run_manifest.json").read_text(encoding="utf-8"))
+    readme_text = (output_dir / "README.md").read_text(encoding="utf-8")
     assert manifest["date_start"] == "2025-01-02"
     assert manifest["date_end"] == "2025-01-02"
     assert manifest["counts"]["edge_rows"] == 1
     assert manifest["counts"]["community_rows"] == 1
+    assert "Status: `Graph evaluation artifact ready for manual review`" in readme_text
+    assert "See `ASSESSMENT.md` if a month-specific research conclusion has been written." in readme_text
     assert manifest["generator"]["git_head"] == "pack123"
     assert manifest["generator"]["git_branch"] == "test-branch"
     assert manifest["generator"]["relevant_worktree_dirty"] is False

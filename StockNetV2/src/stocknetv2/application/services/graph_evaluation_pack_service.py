@@ -1005,6 +1005,9 @@ def _write_readme(
     content = (
         "# Graph Evaluation Pack\n\n"
         f"Date range: `{date_start}` to `{date_end}`\n\n"
+        "Status: `Graph evaluation artifact ready for manual review`\n"
+        "Quality gate: `Not sufficient by itself to approve theme discovery, lifecycle analysis, or backtesting`\n\n"
+        "See `ASSESSMENT.md` if a month-specific research conclusion has been written.\n\n"
         "This pack is designed for manual graph-quality and financial-meaning review of the first month.\n"
         "It does not depend on rerunning the full T1 theme pipeline; instead it reconstructs evaluation context from the monthly graph-build database plus the market database.\n\n"
         "## Start Here\n\n"
