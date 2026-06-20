@@ -5,6 +5,7 @@ from dataclasses import dataclass
 import pandas as pd
 
 from stocknetv2.application.services.consensus_service import ConsensusThemeCandidate
+from stocknetv2.domain.graph.series_utils import select_time_window
 from stocknetv2.infrastructure.repositories.market_read_repository import TradeDateInputs
 
 
@@ -33,8 +34,16 @@ class ThemeFlowService:
         inputs: TradeDateInputs,
         snapshot_time: pd.Timestamp,
     ) -> list[ThemeFlowRecord]:
-        trade_flow_window = inputs.trade_flow_1m[inputs.trade_flow_1m["timestamp"] <= snapshot_time].copy()
-        features_window = inputs.features_1m[inputs.features_1m["timestamp"] <= snapshot_time].copy()
+        trade_flow_window = select_time_window(
+            inputs.trade_flow_1m,
+            snapshot_time=snapshot_time,
+            minutes=60,
+        ).copy()
+        features_window = select_time_window(
+            inputs.features_1m,
+            snapshot_time=snapshot_time,
+            minutes=60,
+        ).copy()
 
         records: list[ThemeFlowRecord] = []
         for candidate in candidates:

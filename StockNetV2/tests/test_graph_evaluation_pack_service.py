@@ -352,6 +352,24 @@ def _create_market_database(path: Path) -> None:
         [
             {
                 "symbol": "AAA",
+                "timestamp": "2025-01-02 22:34:00",
+                "date": "2025-01-02",
+                "close": 10.0,
+                "volume": 950.0,
+                "dollar_volume": 9500.0,
+                "trade_count": 14.0,
+                "imbalance_proxy": 0.3,
+                "large_trade_count": 1.0,
+                "large_trade_dollar_volume": 900.0,
+                "ret_1m_past": 0.009,
+                "ret_3m_past": 0.019,
+                "ret_5m_past": 0.029,
+                "ret_15m_past": 0.039,
+                "large_trade_ratio": 0.09,
+                "volume_z_proxy": 1.1,
+            },
+            {
+                "symbol": "AAA",
                 "timestamp": "2025-01-02 22:35:00",
                 "date": "2025-01-02",
                 "close": 10.1,
@@ -367,6 +385,24 @@ def _create_market_database(path: Path) -> None:
                 "ret_15m_past": 0.04,
                 "large_trade_ratio": 0.1,
                 "volume_z_proxy": 1.2,
+            },
+            {
+                "symbol": "BBB",
+                "timestamp": "2025-01-02 22:34:00",
+                "date": "2025-01-02",
+                "close": 20.1,
+                "volume": 1950.0,
+                "dollar_volume": 39195.0,
+                "trade_count": 17.0,
+                "imbalance_proxy": 0.4,
+                "large_trade_count": 2.0,
+                "large_trade_dollar_volume": 1400.0,
+                "ret_1m_past": 0.010,
+                "ret_3m_past": 0.020,
+                "ret_5m_past": 0.030,
+                "ret_15m_past": 0.040,
+                "large_trade_ratio": 0.18,
+                "volume_z_proxy": 1.4,
             },
             {
                 "symbol": "BBB",
@@ -390,14 +426,19 @@ def _create_market_database(path: Path) -> None:
     ).to_parquet(features_partition / "features_1m.parquet", index=False)
     pd.DataFrame(
         [
+            {"symbol": "AAA", "timestamp": "2025-01-02 22:34:00", "future_ret_1m": 0.003, "future_ret_5m": 0.007, "future_ret_15m": 0.011, "future_ret_30m": 0.016, "date": "2025-01-02"},
             {"symbol": "AAA", "timestamp": "2025-01-02 22:35:00", "future_ret_1m": 0.002, "future_ret_5m": 0.006, "future_ret_15m": 0.010, "future_ret_30m": 0.015, "date": "2025-01-02"},
+            {"symbol": "BBB", "timestamp": "2025-01-02 22:34:00", "future_ret_1m": 0.002, "future_ret_5m": 0.006, "future_ret_15m": 0.010, "future_ret_30m": 0.015, "date": "2025-01-02"},
             {"symbol": "BBB", "timestamp": "2025-01-02 22:35:00", "future_ret_1m": 0.001, "future_ret_5m": 0.005, "future_ret_15m": 0.009, "future_ret_30m": 0.014, "date": "2025-01-02"},
+            {"symbol": "SPY", "timestamp": "2025-01-02 22:34:00", "future_ret_1m": 0.0006, "future_ret_5m": 0.0026, "future_ret_15m": 0.0041, "future_ret_30m": 0.0061, "date": "2025-01-02"},
             {"symbol": "SPY", "timestamp": "2025-01-02 22:35:00", "future_ret_1m": 0.0005, "future_ret_5m": 0.0025, "future_ret_15m": 0.0040, "future_ret_30m": 0.0060, "date": "2025-01-02"},
         ]
     ).to_parquet(labels_partition / "labels_1m.parquet", index=False)
     pd.DataFrame(
         [
+            {"ticker": "AAA", "minute": "2025-01-02 22:34:00", "trade_count": 14.0, "volume": 950.0, "dollar_volume": 9500.0, "imbalance_proxy": 0.3, "large_trade_count": 1.0, "large_trade_dollar_volume": 900.0, "off_exchange_volume": 90.0, "date": "2025-01-02"},
             {"ticker": "AAA", "minute": "2025-01-02 22:35:00", "trade_count": 15.0, "volume": 1000.0, "dollar_volume": 10100.0, "imbalance_proxy": 0.4, "large_trade_count": 2.0, "large_trade_dollar_volume": 1000.0, "off_exchange_volume": 100.0, "date": "2025-01-02"},
+            {"ticker": "BBB", "minute": "2025-01-02 22:34:00", "trade_count": 17.0, "volume": 1950.0, "dollar_volume": 39195.0, "imbalance_proxy": 0.4, "large_trade_count": 2.0, "large_trade_dollar_volume": 1400.0, "off_exchange_volume": 180.0, "date": "2025-01-02"},
             {"ticker": "BBB", "minute": "2025-01-02 22:35:00", "trade_count": 18.0, "volume": 2000.0, "dollar_volume": 40400.0, "imbalance_proxy": 0.5, "large_trade_count": 3.0, "large_trade_dollar_volume": 1500.0, "off_exchange_volume": 200.0, "date": "2025-01-02"},
             {"ticker": "SPY", "minute": "2025-01-02 22:35:00", "trade_count": 40.0, "volume": 5000.0, "dollar_volume": 2500000.0, "imbalance_proxy": 0.1, "large_trade_count": 1.0, "large_trade_dollar_volume": 5000.0, "off_exchange_volume": 250.0, "date": "2025-01-02"},
         ]
@@ -468,6 +509,10 @@ def test_build_graph_evaluation_pack_exports_review_artifacts(tmp_path):
         output_dir / "graph" / "metadata_coverage_report.csv",
         output_dir / "market" / "symbol_snapshot_features",
         output_dir / "market" / "symbol_forward_labels",
+        output_dir / "market" / "community_snapshot_features.parquet",
+        output_dir / "market" / "community_forward_labels.parquet",
+        output_dir / "market" / "alpha_sanity_report.csv",
+        output_dir / "market" / "metadata_trust_policy.json",
         output_dir / "market" / "symbol_master.csv",
         output_dir / "market" / "benchmark_series",
     ]
@@ -540,14 +585,64 @@ def test_build_graph_evaluation_pack_exports_review_artifacts(tmp_path):
         "country": "United States",
         "quote_type": "EQUITY",
     }
-    assert connection.execute(
-        "SELECT COUNT(*) FROM read_parquet(?)",
+    symbol_features = connection.execute(
+        """
+        SELECT
+            symbol,
+            graph_input_feature_timestamp,
+            graph_input_available_time,
+            ret_1m,
+            flow_feature_timestamp,
+            flow_available_time,
+            flow_trade_count
+        FROM read_parquet(?)
+        ORDER BY symbol
+        """,
         [str(output_dir / "market" / "symbol_snapshot_features" / "*.parquet")],
-    ).fetchone()[0] == 2
+    ).fetchdf()
+    assert len(symbol_features) == 2
+    assert symbol_features.loc[0, "symbol"] == "AAA"
+    assert str(symbol_features.loc[0, "graph_input_feature_timestamp"]) == "2025-01-02 22:34:00"
+    assert str(symbol_features.loc[0, "graph_input_available_time"]) == "2025-01-02 22:35:00"
+    assert symbol_features.loc[0, "ret_1m"] == 0.009
+    assert str(symbol_features.loc[0, "flow_feature_timestamp"]) == "2025-01-02 22:34:00"
+    assert str(symbol_features.loc[0, "flow_available_time"]) == "2025-01-02 22:35:00"
+    assert symbol_features.loc[0, "flow_trade_count"] == 14.0
+
+    symbol_labels = connection.execute(
+        """
+        SELECT
+            symbol,
+            label_source_timestamp,
+            label_available_time,
+            future_ret_1m,
+            excess_future_ret_1m
+        FROM read_parquet(?)
+        ORDER BY symbol
+        """,
+        [str(output_dir / "market" / "symbol_forward_labels" / "*.parquet")],
+    ).fetchdf()
+    assert len(symbol_labels) == 2
+    assert str(symbol_labels.loc[0, "label_source_timestamp"]) == "2025-01-02 22:34:00"
+    assert str(symbol_labels.loc[0, "label_available_time"]) == "2025-01-02 22:35:00"
+    assert symbol_labels.loc[0, "future_ret_1m"] == 0.003
+    assert round(symbol_labels.loc[0, "excess_future_ret_1m"], 6) == round(0.003 - 0.0006, 6)
+
     assert connection.execute(
         "SELECT COUNT(*) FROM read_parquet(?)",
-        [str(output_dir / "market" / "symbol_forward_labels" / "*.parquet")],
-    ).fetchone()[0] == 2
+        [str(output_dir / "market" / "community_snapshot_features.parquet")],
+    ).fetchone()[0] == 1
+    assert connection.execute(
+        "SELECT COUNT(*) FROM read_parquet(?)",
+        [str(output_dir / "market" / "community_forward_labels.parquet")],
+    ).fetchone()[0] == 1
+    alpha_report = connection.execute(
+        "SELECT COUNT(*) FROM read_csv_auto(?)",
+        [str(output_dir / "market" / "alpha_sanity_report.csv")],
+    ).fetchone()[0]
+    assert alpha_report > 0
+    metadata_policy = json.loads((output_dir / "market" / "metadata_trust_policy.json").read_text(encoding="utf-8"))
+    assert "safe_model_features" in metadata_policy
     connection.close()
 
 

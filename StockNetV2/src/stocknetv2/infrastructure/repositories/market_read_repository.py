@@ -274,6 +274,10 @@ class MarketReadRepository:
         if "imbalance_proxy" in normalized.columns and "imbalance_z" not in normalized.columns:
             normalized = normalized.rename(columns={"imbalance_proxy": "imbalance_z"})
         normalized = self._normalize_duckdb_timestamps(normalized, ["timestamp"])
+        if "available_time" in normalized.columns:
+            normalized = self._normalize_duckdb_timestamps(normalized, ["available_time"])
+        else:
+            normalized["available_time"] = normalized["timestamp"] + pd.Timedelta(minutes=1)
         if "flow_impulse_score" not in normalized.columns:
             if "imbalance_z" in normalized.columns:
                 normalized["flow_impulse_score"] = pd.to_numeric(normalized["imbalance_z"], errors="coerce").fillna(0.0)
@@ -302,6 +306,12 @@ class MarketReadRepository:
             }
         ).copy()
         normalized = self._normalize_duckdb_timestamps(normalized, ["timestamp", "bar_end"])
+        if "available_time" in normalized.columns:
+            normalized = self._normalize_duckdb_timestamps(normalized, ["available_time"])
+        elif "bar_end" in normalized.columns:
+            normalized["available_time"] = normalized["bar_end"]
+        else:
+            normalized["available_time"] = normalized["timestamp"] + pd.Timedelta(minutes=1)
         return normalized
 
     def _normalize_layout_features_1m(self, frame: pd.DataFrame) -> pd.DataFrame:
@@ -312,6 +322,12 @@ class MarketReadRepository:
             normalized["timestamp"] = pd.to_datetime(normalized["timestamp"], utc=True, errors="coerce")
         if "bar_end" in normalized.columns:
             normalized["bar_end"] = pd.to_datetime(normalized["bar_end"], utc=True, errors="coerce")
+        if "available_time" in normalized.columns:
+            normalized["available_time"] = pd.to_datetime(normalized["available_time"], utc=True, errors="coerce")
+        elif "bar_end" in normalized.columns:
+            normalized["available_time"] = normalized["bar_end"]
+        else:
+            normalized["available_time"] = normalized["timestamp"] + pd.Timedelta(minutes=1)
         rename_map = {
             "ret_1m_past": "ret_1m",
             "volume_z_proxy": "volume_z_12",
@@ -379,11 +395,16 @@ class MarketReadRepository:
             + 0.25 * merged["imbalance_z"].fillna(0.0)
             + 0.15 * merged["large_trade_ratio_z"].fillna(0.0)
         )
+        if "bar_end" in merged.columns:
+            merged["available_time"] = merged["bar_end"]
+        else:
+            merged["available_time"] = merged["timestamp"] + pd.Timedelta(minutes=1)
 
         return merged[
             [
                 "symbol",
                 "timestamp",
+                "available_time",
                 "ret_1m",
                 "volume_z_12",
                 "imbalance_z",

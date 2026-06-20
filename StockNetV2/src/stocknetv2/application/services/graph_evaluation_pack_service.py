@@ -758,6 +758,24 @@ def build_graph_evaluation_pack(
             primary_benchmark,
             market_data_root,
         )
+        artifact_paths["community_snapshot_features"] = market_output_dir / "community_snapshot_features.parquet"
+        _export_community_snapshot_features(
+            artifact_paths["community_membership"],
+            artifact_paths["symbol_snapshot_features"],
+            artifact_paths["community_snapshot_features"],
+        )
+        artifact_paths["community_forward_labels"] = market_output_dir / "community_forward_labels.parquet"
+        _export_community_forward_labels(
+            artifact_paths["community_membership"],
+            artifact_paths["symbol_forward_labels"],
+            artifact_paths["community_forward_labels"],
+        )
+        artifact_paths["alpha_sanity_report"] = market_output_dir / "alpha_sanity_report.csv"
+        _export_alpha_sanity_report(
+            artifact_paths["community_snapshot_features"],
+            artifact_paths["community_forward_labels"],
+            artifact_paths["alpha_sanity_report"],
+        )
         artifact_paths["benchmark_series"] = market_output_dir / "benchmark_series"
         _export_benchmark_series_shards(
             trade_dates,
@@ -765,6 +783,8 @@ def build_graph_evaluation_pack(
             benchmark_symbols,
             market_data_root,
         )
+        artifact_paths["metadata_trust_policy"] = market_output_dir / "metadata_trust_policy.json"
+        _write_metadata_trust_policy(artifact_paths["metadata_trust_policy"])
 
         artifact_paths["symbol_master"] = market_output_dir / "symbol_master.csv"
         active_symbol_master = symbol_master_frame[symbol_master_frame["symbol"].isin(active_symbols)].copy()
@@ -1091,13 +1111,17 @@ def _write_readme(
         "## Start Here\n\n"
         "1. Open `graph/layer_review_candidates.csv`.\n"
         "2. Use `graph/community_metrics.parquet` and `graph/community_membership.parquet` to inspect whether large communities are real themes, sector baskets, or market-mode clusters.\n"
-        "3. Use `market/symbol_snapshot_features.parquet` to inspect the state of each member at the snapshot.\n"
-        f"4. Use `market/symbol_forward_labels.parquet` to check whether members outperformed `{primary_benchmark}` over the next 1m/5m/15m/30m windows.\n"
-        "5. Use `graph/snapshot_layer_diagnostics.csv` to find pathological layers, giant clusters, or snapshots where one layer dominates the universe.\n\n"
+        "3. Use `market/symbol_snapshot_features/` to inspect the causality-safe state of each member at the snapshot.\n"
+        f"4. Use `market/symbol_forward_labels/` to check whether members outperformed `{primary_benchmark}` over the next 1m/5m/15m/30m windows.\n"
+        "5. Use `market/community_snapshot_features.parquet`, `market/community_forward_labels.parquet`, and `market/alpha_sanity_report.csv` for the first community-level alpha sanity pass.\n"
+        "6. Use `graph/snapshot_layer_diagnostics.csv` to find pathological layers, giant clusters, or snapshots where one layer dominates the universe.\n\n"
         "## Time Notes\n\n"
         "- `snapshot_clock_code` is the canonical market-clock label from the snapshot id suffix.\n"
         "- `snapshot_timestamp` is the stored timestamp value from the graph database.\n"
-        "- `available_minutes_since_open` is the safest field for intraday sequencing if timezone display looks inconsistent.\n\n"
+        "- `available_minutes_since_open` is the safest field for intraday sequencing if timezone display looks inconsistent.\n"
+        "- Symbol features now carry `graph_input_available_time` and trade-flow `flow_available_time`; they are only joined into a snapshot when `available_time <= snapshot_timestamp`.\n"
+        "- Forward labels now carry `label_available_time` and are aligned from the last completed 1m bucket available at the snapshot, not from unfinished 1m bars.\n"
+        "- Metadata is exported for post-hoc validation only; see `market/metadata_trust_policy.json` before using any field in modeling.\n\n"
         "## Files\n\n"
         "- `graph/all_edges/`: thresholded graph edges, sharded by trade date as parquet.\n"
         "- `graph/snapshot_layer_diagnostics.csv`: per-snapshot, per-layer structure diagnostics.\n"
@@ -1105,8 +1129,12 @@ def _write_readme(
         "- `graph/community_metrics.parquet`: community-level structure and concentration metrics.\n"
         "- `graph/community_membership.parquet`: member roster for each community.\n"
         "- `graph/layer_review_candidates.csv`: ranked shortlist for manual review.\n"
-        "- `market/symbol_snapshot_features/`: snapshot-aligned symbol state features, derived from `bars_5m + trade_flow_1m` and sharded by trade date as parquet.\n"
-        "- `market/symbol_forward_labels/`: forward returns and benchmark-relative labels, sharded by trade date as parquet.\n"
+        "- `market/symbol_snapshot_features/`: snapshot-aligned symbol state features and actual graph inputs, sharded by trade date as parquet.\n"
+        "- `market/symbol_forward_labels/`: causality-safe forward returns and benchmark-relative labels, sharded by trade date as parquet.\n"
+        "- `market/community_snapshot_features.parquet`: community-level feature aggregates built only from snapshot-time-available symbol inputs.\n"
+        "- `market/community_forward_labels.parquet`: community-level forward labels kept physically separate from features.\n"
+        "- `market/alpha_sanity_report.csv`: first-pass RankIC / decile / hit-rate summary for community-level evaluation.\n"
+        "- `market/metadata_trust_policy.json`: allowed post-hoc validation use vs modeling restrictions for metadata fields.\n"
         "- `market/symbol_master.csv`: symbol metadata used for joins.\n"
         "- `market/benchmark_series/`: benchmark bar series for context, sharded by trade date as parquet.\n"
         f"{compare_note}"
@@ -1366,6 +1394,7 @@ def _export_symbol_snapshot_feature_shards(
         if active_day.empty:
             _write_parquet_dataframe(active_day, output_dir / f"{trade_date}.parquet")
             continue
+        active_day = _prepare_active_snapshot_frame(active_day)
         bars_full_day = _read_partition_parquet(
             market_data_root,
             "bars_5m",
@@ -1391,6 +1420,40 @@ def _export_symbol_snapshot_feature_shards(
             )
         else:
             bars_day = bars_full_day
+        if not bars_day.empty:
+            bars_day["bar_timestamp"] = bars_day["timestamp"]
+            bars_day["bar_available_time"] = bars_day["timestamp"]
+
+        features_day = _read_partition_parquet(
+            market_data_root,
+            "features_1m",
+            trade_date,
+            columns=[
+                "symbol",
+                "timestamp",
+                "available_time",
+                "bar_end",
+                "date",
+                "close",
+                "volume",
+                "dollar_volume",
+                "trade_count",
+                "imbalance_proxy",
+                "large_trade_count",
+                "large_trade_dollar_volume",
+                "ret_1m",
+                "ret_1m_past",
+                "ret_3m_past",
+                "ret_5m_past",
+                "ret_15m_past",
+                "large_trade_ratio",
+                "large_trade_ratio_z",
+                "volume_z_12",
+                "volume_z_proxy",
+                "flow_impulse_score",
+            ],
+        )
+        features_day = _prepare_feature_review_frame(features_day)
 
         trade_flow_day = _read_partition_parquet(
             market_data_root,
@@ -1417,19 +1480,26 @@ def _export_symbol_snapshot_feature_shards(
                 "large_trade_dollar_volume": "flow_large_trade_dollar_volume",
             }
         )
+        trade_flow_day = _prepare_trade_flow_review_frame(trade_flow_day)
 
-        merged = active_day.merge(
+        merged = _merge_latest_available(
+            active_day,
             bars_day,
-            how="left",
-            left_on=["symbol", "snapshot_timestamp"],
-            right_on=["symbol", "timestamp"],
+            right_time_column="bar_available_time",
         )
-        if "timestamp" in merged.columns:
-            merged = merged.drop(columns=["timestamp"])
-        merged = merged.merge(trade_flow_day, how="left", left_on=["symbol", "snapshot_timestamp"], right_on=["ticker", "minute"])
+        merged = _merge_latest_available(
+            merged,
+            features_day,
+            right_time_column="graph_input_available_time",
+        )
+        merged = _merge_latest_available(
+            merged,
+            trade_flow_day,
+            right_time_column="flow_available_time",
+        )
         merged = merged.drop(columns=[column for column in ("ticker", "minute") if column in merged.columns])
         merged = merged.merge(symbol_master_frame, how="left", on="symbol")
-        merged["feature_source"] = "bars_5m+trade_flow_1m_derived"
+        merged["feature_source"] = "causality_safe_graph_inputs_plus_context"
         _write_parquet_dataframe(merged, output_dir / f"{trade_date}.parquet")
 
 
@@ -1446,20 +1516,27 @@ def _export_symbol_forward_label_shards(
         if active_day.empty:
             _write_parquet_dataframe(active_day, output_dir / f"{trade_date}.parquet")
             continue
+        active_day = _prepare_active_snapshot_frame(active_day)
         labels_day = _read_partition_parquet(
             market_data_root,
             "labels_1m",
             trade_date,
             columns=["symbol", "timestamp", "future_ret_1m", "future_ret_5m", "future_ret_15m", "future_ret_30m"],
         )
+        labels_day = _prepare_label_review_frame(labels_day)
         benchmark_day = labels_day.loc[labels_day["symbol"] == primary_benchmark, [
-            "timestamp",
+            "symbol",
+            "label_source_timestamp",
+            "label_available_time",
             "future_ret_1m",
             "future_ret_5m",
             "future_ret_15m",
             "future_ret_30m",
         ]].rename(
             columns={
+                "symbol": "benchmark_symbol",
+                "label_source_timestamp": "benchmark_label_source_timestamp",
+                "label_available_time": "benchmark_label_available_time",
                 "future_ret_1m": "benchmark_future_ret_1m",
                 "future_ret_5m": "benchmark_future_ret_5m",
                 "future_ret_15m": "benchmark_future_ret_15m",
@@ -1467,23 +1544,18 @@ def _export_symbol_forward_label_shards(
             }
         )
 
-        merged = active_day.merge(
+        merged = _merge_latest_available(
+            active_day,
             labels_day,
-            how="left",
-            left_on=["symbol", "snapshot_timestamp"],
-            right_on=["symbol", "timestamp"],
+            right_time_column="label_available_time",
         )
-        if "timestamp" in merged.columns:
-            merged = merged.drop(columns=["timestamp"])
-        merged = merged.merge(
-            benchmark_day,
-            how="left",
-            left_on="snapshot_timestamp",
-            right_on="timestamp",
-        )
-        if "timestamp" in merged.columns:
-            merged = merged.drop(columns=["timestamp"])
         merged.insert(5, "benchmark_symbol", primary_benchmark)
+        merged = _merge_latest_available(
+            merged,
+            benchmark_day,
+            by_column="benchmark_symbol",
+            right_time_column="benchmark_label_available_time",
+        )
         merged["excess_future_ret_1m"] = merged["future_ret_1m"] - merged["benchmark_future_ret_1m"]
         merged["excess_future_ret_5m"] = merged["future_ret_5m"] - merged["benchmark_future_ret_5m"]
         merged["excess_future_ret_15m"] = merged["future_ret_15m"] - merged["benchmark_future_ret_15m"]
@@ -1510,6 +1582,372 @@ def _export_benchmark_series_shards(
             frame = frame.sort_values(["symbol", "timestamp"])
             frame["ret_5m"] = frame.groupby("symbol")["close"].pct_change(1)
         _write_parquet_dataframe(frame, output_dir / f"{trade_date}.parquet")
+
+
+def _export_community_snapshot_features(
+    community_membership_path: Path,
+    symbol_snapshot_feature_dir: Path,
+    output_path: Path,
+) -> None:
+    connection = duckdb.connect()
+    try:
+        query = f"""
+        WITH member_features AS (
+            SELECT
+                m.trade_date,
+                m.snapshot_id,
+                m.snapshot_timestamp,
+                m.snapshot_clock_code,
+                m.graph_layer,
+                m.layer_community_id,
+                m.community_local_id,
+                m.community_member_count,
+                m.community_edge_count,
+                m.edge_density,
+                m.community_avg_weight,
+                m.symbol,
+                m.member_rank,
+                m.member_weight,
+                sf.graph_input_feature_timestamp,
+                sf.graph_input_available_time,
+                sf.ret_1m,
+                sf.volume_z_12,
+                sf.imbalance_z,
+                sf.large_trade_ratio_z,
+                sf.flow_impulse_score,
+                sf.bar_ret_5m_past,
+                sf.bar_ret_15m_past,
+                sf.market_cap,
+                sf.sector_code,
+                sf.industry_code
+            FROM read_parquet('{_escape_sql_literal(str(community_membership_path))}') m
+            LEFT JOIN read_parquet('{_escape_sql_literal(str(symbol_snapshot_feature_dir / "*.parquet"))}') sf
+                ON sf.snapshot_id = m.snapshot_id
+               AND sf.symbol = m.symbol
+        )
+        SELECT
+            trade_date,
+            snapshot_id,
+            snapshot_timestamp,
+            snapshot_clock_code,
+            graph_layer,
+            layer_community_id,
+            community_local_id,
+            MAX(community_member_count) AS community_member_count,
+            MAX(community_edge_count) AS community_edge_count,
+            MAX(edge_density) AS edge_density,
+            MAX(community_avg_weight) AS community_avg_weight,
+            COUNT(*) AS membership_rows,
+            AVG(CASE WHEN ret_1m IS NOT NULL THEN 1.0 ELSE 0.0 END) AS feature_coverage_ratio,
+            AVG(ret_1m) AS community_mean_ret_1m,
+            AVG(volume_z_12) AS community_mean_volume_z_12,
+            AVG(imbalance_z) AS community_mean_imbalance_z,
+            AVG(large_trade_ratio_z) AS community_mean_large_trade_ratio_z,
+            AVG(flow_impulse_score) AS community_mean_flow_impulse_score,
+            AVG(bar_ret_5m_past) AS community_mean_bar_ret_5m_past,
+            AVG(bar_ret_15m_past) AS community_mean_bar_ret_15m_past,
+            AVG(CASE WHEN ret_1m > 0 THEN 1.0 ELSE 0.0 END) AS positive_ret_1m_breadth,
+            AVG(CASE WHEN flow_impulse_score > 0 THEN 1.0 ELSE 0.0 END) AS positive_flow_breadth,
+            AVG(CASE WHEN large_trade_ratio_z > 0 THEN 1.0 ELSE 0.0 END) AS positive_large_trade_breadth,
+            AVG(CASE WHEN market_cap IS NOT NULL AND market_cap > 0 THEN 1.0 ELSE 0.0 END) AS market_cap_coverage_ratio,
+            AVG(CASE WHEN sector_code IS NOT NULL AND UPPER(TRIM(sector_code)) <> 'UNKNOWN' THEN 1.0 ELSE 0.0 END) AS sector_coverage_ratio,
+            AVG(CASE WHEN industry_code IS NOT NULL AND UPPER(TRIM(industry_code)) <> 'UNKNOWN' THEN 1.0 ELSE 0.0 END) AS industry_coverage_ratio,
+            MIN(graph_input_feature_timestamp) AS earliest_graph_input_feature_timestamp,
+            MAX(graph_input_feature_timestamp) AS latest_graph_input_feature_timestamp,
+            MAX(graph_input_available_time) AS latest_graph_input_available_time
+        FROM member_features
+        GROUP BY 1, 2, 3, 4, 5, 6, 7
+        """
+        _copy_query_to_parquet(connection, query, output_path)
+    finally:
+        connection.close()
+
+
+def _export_community_forward_labels(
+    community_membership_path: Path,
+    symbol_forward_label_dir: Path,
+    output_path: Path,
+) -> None:
+    connection = duckdb.connect()
+    try:
+        query = f"""
+        WITH member_labels AS (
+            SELECT
+                m.trade_date,
+                m.snapshot_id,
+                m.snapshot_timestamp,
+                m.snapshot_clock_code,
+                m.graph_layer,
+                m.layer_community_id,
+                m.community_local_id,
+                m.community_member_count,
+                m.community_edge_count,
+                m.edge_density,
+                m.community_avg_weight,
+                m.symbol,
+                sf.label_source_timestamp,
+                sf.label_available_time,
+                sf.future_ret_1m,
+                sf.future_ret_5m,
+                sf.future_ret_15m,
+                sf.future_ret_30m,
+                sf.excess_future_ret_1m,
+                sf.excess_future_ret_5m,
+                sf.excess_future_ret_15m,
+                sf.excess_future_ret_30m
+            FROM read_parquet('{_escape_sql_literal(str(community_membership_path))}') m
+            LEFT JOIN read_parquet('{_escape_sql_literal(str(symbol_forward_label_dir / "*.parquet"))}') sf
+                ON sf.snapshot_id = m.snapshot_id
+               AND sf.symbol = m.symbol
+        )
+        SELECT
+            trade_date,
+            snapshot_id,
+            snapshot_timestamp,
+            snapshot_clock_code,
+            graph_layer,
+            layer_community_id,
+            community_local_id,
+            MAX(community_member_count) AS community_member_count,
+            MAX(community_edge_count) AS community_edge_count,
+            MAX(edge_density) AS edge_density,
+            MAX(community_avg_weight) AS community_avg_weight,
+            COUNT(*) AS membership_rows,
+            AVG(CASE WHEN future_ret_1m IS NOT NULL THEN 1.0 ELSE 0.0 END) AS label_coverage_ratio,
+            AVG(future_ret_1m) AS community_mean_future_ret_1m,
+            AVG(future_ret_5m) AS community_mean_future_ret_5m,
+            AVG(future_ret_15m) AS community_mean_future_ret_15m,
+            AVG(future_ret_30m) AS community_mean_future_ret_30m,
+            AVG(excess_future_ret_1m) AS community_mean_excess_future_ret_1m,
+            AVG(excess_future_ret_5m) AS community_mean_excess_future_ret_5m,
+            AVG(excess_future_ret_15m) AS community_mean_excess_future_ret_15m,
+            AVG(excess_future_ret_30m) AS community_mean_excess_future_ret_30m,
+            AVG(CASE WHEN future_ret_1m > 0 THEN 1.0 ELSE 0.0 END) AS positive_future_ret_1m_breadth,
+            AVG(CASE WHEN future_ret_5m > 0 THEN 1.0 ELSE 0.0 END) AS positive_future_ret_5m_breadth,
+            AVG(CASE WHEN future_ret_15m > 0 THEN 1.0 ELSE 0.0 END) AS positive_future_ret_15m_breadth,
+            AVG(CASE WHEN future_ret_30m > 0 THEN 1.0 ELSE 0.0 END) AS positive_future_ret_30m_breadth,
+            MIN(label_source_timestamp) AS earliest_label_source_timestamp,
+            MAX(label_source_timestamp) AS latest_label_source_timestamp,
+            MAX(label_available_time) AS latest_label_available_time
+        FROM member_labels
+        GROUP BY 1, 2, 3, 4, 5, 6, 7
+        """
+        _copy_query_to_parquet(connection, query, output_path)
+    finally:
+        connection.close()
+
+
+def _export_alpha_sanity_report(
+    community_snapshot_feature_path: Path,
+    community_forward_label_path: Path,
+    output_path: Path,
+) -> None:
+    features = pd.read_parquet(community_snapshot_feature_path)
+    labels = pd.read_parquet(community_forward_label_path)
+    merged = features.merge(
+        labels,
+        how="inner",
+        on=["snapshot_id", "graph_layer", "layer_community_id"],
+        suffixes=("_feature", "_label"),
+    )
+    factors = [
+        "community_mean_volume_z_12",
+        "community_mean_flow_impulse_score",
+        "positive_ret_1m_breadth",
+        "positive_flow_breadth",
+        "community_avg_weight_feature",
+    ]
+    horizons = [
+        ("1m", "community_mean_excess_future_ret_1m"),
+        ("5m", "community_mean_excess_future_ret_5m"),
+        ("15m", "community_mean_excess_future_ret_15m"),
+        ("30m", "community_mean_excess_future_ret_30m"),
+    ]
+    rows: list[dict[str, Any]] = []
+    for graph_layer, layer_frame in merged.groupby("graph_layer", dropna=False):
+        for factor_name in factors:
+            if factor_name not in layer_frame.columns:
+                continue
+            for horizon_name, target_name in horizons:
+                if target_name not in layer_frame.columns:
+                    continue
+                sample = layer_frame[[factor_name, target_name]].dropna()
+                if sample.empty:
+                    rows.append(
+                        {
+                            "graph_layer": graph_layer,
+                            "factor_name": factor_name,
+                            "label_horizon": horizon_name,
+                            "sample_size": 0,
+                            "rank_ic": None,
+                            "top_decile_mean": None,
+                            "bottom_decile_mean": None,
+                            "top_bottom_spread": None,
+                            "top_decile_hit_rate": None,
+                        }
+                    )
+                    continue
+                rank_ic = sample[factor_name].rank().corr(sample[target_name].rank())
+                decile_size = max(1, len(sample) // 10)
+                sorted_sample = sample.sort_values(factor_name)
+                bottom = sorted_sample.head(decile_size)[target_name]
+                top = sorted_sample.tail(decile_size)[target_name]
+                rows.append(
+                    {
+                        "graph_layer": graph_layer,
+                        "factor_name": factor_name,
+                        "label_horizon": horizon_name,
+                        "sample_size": int(len(sample)),
+                        "rank_ic": None if pd.isna(rank_ic) else float(rank_ic),
+                        "top_decile_mean": float(top.mean()),
+                        "bottom_decile_mean": float(bottom.mean()),
+                        "top_bottom_spread": float(top.mean() - bottom.mean()),
+                        "top_decile_hit_rate": float((top > 0).mean()),
+                    }
+                )
+    pd.DataFrame(rows).to_csv(output_path, index=False)
+
+
+def _write_metadata_trust_policy(output_path: Path) -> None:
+    policy_path = Path(__file__).resolve().parents[4] / "metadata_trust_policy.json"
+    if policy_path.exists():
+        output_path.write_text(policy_path.read_text(encoding="utf-8"), encoding="utf-8")
+        return
+    output_path.write_text(
+        json.dumps(_default_metadata_trust_policy(), indent=2, ensure_ascii=False),
+        encoding="utf-8",
+    )
+
+
+def _default_metadata_trust_policy() -> dict[str, Any]:
+    return {
+        "policy_version": "2026-06-20",
+        "purpose": "Metadata is exported for post-hoc validation and review. It must not introduce future bias into model training or graph construction.",
+        "safe_model_features": ["sector", "industry", "exchange", "country"],
+        "time_dependent_features": ["market_cap_bucket_at_t", "price_at_t", "shares_outstanding_at_t"],
+        "unsafe_interpretation_only": ["supplier", "customer", "theme", "narrative", "moat"],
+        "notes": [
+            "Current metadata exports are intended for ex-post evaluation only.",
+            "Do not backfill modern narrative labels into historical model features.",
+            "If market cap is required in modeling, reconstruct it at time t from contemporaneous price and historically valid shares outstanding.",
+        ],
+    }
+
+
+def _prepare_active_snapshot_frame(frame: pd.DataFrame) -> pd.DataFrame:
+    prepared = frame.copy()
+    prepared["snapshot_timestamp"] = pd.to_datetime(prepared["snapshot_timestamp"])
+    return prepared.sort_values(["symbol", "snapshot_timestamp"]).reset_index(drop=True)
+
+
+def _prepare_feature_review_frame(frame: pd.DataFrame) -> pd.DataFrame:
+    if frame.empty:
+        return pd.DataFrame(
+            columns=[
+                "symbol",
+                "graph_input_feature_timestamp",
+                "graph_input_available_time",
+                "ret_1m",
+                "volume_z_12",
+                "imbalance_z",
+                "large_trade_ratio_z",
+                "flow_impulse_score",
+            ]
+        )
+    prepared = frame.copy()
+    if "ret_1m" not in prepared.columns and "ret_1m_past" in prepared.columns:
+        prepared["ret_1m"] = prepared["ret_1m_past"]
+    if "volume_z_12" not in prepared.columns and "volume_z_proxy" in prepared.columns:
+        prepared["volume_z_12"] = prepared["volume_z_proxy"]
+    if "large_trade_ratio_z" not in prepared.columns and "large_trade_ratio" in prepared.columns:
+        prepared["large_trade_ratio_z"] = prepared["large_trade_ratio"]
+    if "imbalance_z" not in prepared.columns and "imbalance_proxy" in prepared.columns:
+        prepared["imbalance_z"] = prepared["imbalance_proxy"]
+    if "flow_impulse_score" not in prepared.columns:
+        if "imbalance_z" in prepared.columns:
+            prepared["flow_impulse_score"] = pd.to_numeric(prepared["imbalance_z"], errors="coerce").fillna(0.0)
+        else:
+            prepared["flow_impulse_score"] = 0.0
+    if "graph_input_available_time" not in prepared.columns:
+        if "available_time" in prepared.columns:
+            prepared["graph_input_available_time"] = pd.to_datetime(prepared["available_time"])
+        elif "bar_end" in prepared.columns:
+            prepared["graph_input_available_time"] = pd.to_datetime(prepared["bar_end"])
+        else:
+            prepared["graph_input_available_time"] = pd.to_datetime(prepared["timestamp"]) + pd.Timedelta(minutes=1)
+    prepared["graph_input_feature_timestamp"] = pd.to_datetime(prepared["timestamp"])
+    return prepared.sort_values(["symbol", "graph_input_available_time"]).reset_index(drop=True)
+
+
+def _prepare_trade_flow_review_frame(frame: pd.DataFrame) -> pd.DataFrame:
+    if frame.empty:
+        return pd.DataFrame(
+            columns=[
+                "symbol",
+                "flow_feature_timestamp",
+                "flow_available_time",
+                "flow_trade_count",
+                "flow_volume",
+                "flow_dollar_volume",
+                "flow_imbalance_proxy",
+                "flow_large_trade_count",
+                "flow_large_trade_dollar_volume",
+            ]
+        )
+    prepared = frame.copy()
+    if "ticker" in prepared.columns:
+        prepared = prepared.rename(columns={"ticker": "symbol"})
+    if "minute" in prepared.columns:
+        prepared["flow_feature_timestamp"] = pd.to_datetime(prepared["minute"])
+    else:
+        prepared["flow_feature_timestamp"] = pd.to_datetime(prepared["timestamp"])
+    prepared["flow_available_time"] = prepared["flow_feature_timestamp"] + pd.Timedelta(minutes=1)
+    return prepared.sort_values(["symbol", "flow_available_time"]).reset_index(drop=True)
+
+
+def _prepare_label_review_frame(frame: pd.DataFrame) -> pd.DataFrame:
+    if frame.empty:
+        return pd.DataFrame(
+            columns=[
+                "symbol",
+                "label_source_timestamp",
+                "label_available_time",
+                "future_ret_1m",
+                "future_ret_5m",
+                "future_ret_15m",
+                "future_ret_30m",
+            ]
+        )
+    prepared = frame.copy()
+    prepared["label_source_timestamp"] = pd.to_datetime(prepared["timestamp"])
+    prepared["label_available_time"] = prepared["label_source_timestamp"] + pd.Timedelta(minutes=1)
+    return prepared.sort_values(["symbol", "label_available_time"]).reset_index(drop=True)
+
+
+def _merge_latest_available(
+    left: pd.DataFrame,
+    right: pd.DataFrame,
+    *,
+    right_time_column: str,
+    by_column: str = "symbol",
+) -> pd.DataFrame:
+    if left.empty or right.empty:
+        return left.copy()
+    left_working = left.copy()
+    left_working["_merge_row_order"] = range(len(left_working))
+    right_working = right.copy()
+    left_sorted = left_working.sort_values(["snapshot_timestamp", by_column]).reset_index(drop=True)
+    right_sorted = right_working.sort_values([right_time_column, by_column]).reset_index(drop=True)
+    merged = pd.merge_asof(
+        left_sorted,
+        right_sorted,
+        by=by_column,
+        left_on="snapshot_timestamp",
+        right_on=right_time_column,
+        direction="backward",
+        allow_exact_matches=True,
+    )
+    return merged.sort_values("_merge_row_order").drop(columns=["_merge_row_order"]).reset_index(drop=True)
 
 
 def _copy_query_to_parquet(
@@ -1617,7 +2055,7 @@ def _read_partition_parquet(
         if columns is not None:
             existing_columns = [column for column in columns if column in frame.columns]
             frame = frame.loc[:, existing_columns]
-    for column in ("timestamp", "minute"):
+    for column in ("timestamp", "minute", "bar_end", "available_time"):
         if column in frame.columns:
             frame[column] = pd.to_datetime(frame[column])
             if getattr(frame[column].dt, "tz", None) is not None:

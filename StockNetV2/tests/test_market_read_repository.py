@@ -55,6 +55,10 @@ def test_market_read_repository_lists_available_trade_dates_and_loads_inputs(tmp
     assert list(inputs.bars_5m["symbol"]) == ["AAA", "BBB"]
     assert list(inputs.trade_flow_1m["symbol"]) == ["AAA"]
     assert list(inputs.features_1m["symbol"]) == ["AAA"]
+    assert "available_time" in inputs.trade_flow_1m.columns
+    assert inputs.trade_flow_1m.loc[0, "available_time"] == datetime(2026, 1, 2, 14, 36, tzinfo=UTC)
+    assert "available_time" in inputs.features_1m.columns
+    assert inputs.features_1m.loc[0, "available_time"] == datetime(2026, 1, 2, 14, 36, tzinfo=UTC)
     assert inputs.data_version == "bars_5m:2026-01-02|trade_flow_1m:2026-01-02|features_1m:2026-01-02"
 
 
@@ -134,6 +138,13 @@ def test_market_read_repository_builds_features_from_raw_bars_when_partition_mis
     assert "imbalance_z" in inputs.features_1m.columns
     assert "large_trade_ratio_z" in inputs.features_1m.columns
     assert "flow_impulse_score" in inputs.features_1m.columns
+    assert "available_time" in inputs.features_1m.columns
+    assert inputs.features_1m["available_time"].tolist() == [
+        timestamp + pd.Timedelta(minutes=1) for timestamp in timestamps
+    ]
     assert inputs.trade_flow_1m["symbol"].tolist() == ["AAA"] * 4
     assert inputs.trade_flow_1m["timestamp"].tolist() == timestamps
+    assert inputs.trade_flow_1m["available_time"].tolist() == [
+        timestamp + pd.Timedelta(minutes=1) for timestamp in timestamps
+    ]
     assert "generated_features_1m" in inputs.data_version
