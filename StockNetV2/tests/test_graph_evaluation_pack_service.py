@@ -318,9 +318,11 @@ def _create_market_database(path: Path) -> None:
         INSERT INTO trade_flow_1m VALUES
         (?, ?, ?, ?, ?, ?, ?, ?, ?, ?),
         (?, ?, ?, ?, ?, ?, ?, ?, ?, ?),
+        (?, ?, ?, ?, ?, ?, ?, ?, ?, ?),
         (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         [
+            "SPY", "2025-01-02 22:34:00", 39.0, 4998.0, 2497251.4994, 0.1, 1.0, 5000.0, 240.0, "2025-01-02",
             "AAA", "2025-01-02 22:35:00", 15.0, 1000.0, 10100.0, 0.4, 2.0, 1000.0, 100.0, "2025-01-02",
             "BBB", "2025-01-02 22:35:00", 18.0, 2000.0, 40400.0, 0.5, 3.0, 1500.0, 200.0, "2025-01-02",
             "SPY", "2025-01-02 22:35:00", 40.0, 5000.0, 2500000.0, 0.1, 1.0, 5000.0, 250.0, "2025-01-02",
@@ -440,6 +442,7 @@ def _create_market_database(path: Path) -> None:
             {"ticker": "AAA", "minute": "2025-01-02 22:35:00", "trade_count": 15.0, "volume": 1000.0, "dollar_volume": 10100.0, "imbalance_proxy": 0.4, "large_trade_count": 2.0, "large_trade_dollar_volume": 1000.0, "off_exchange_volume": 100.0, "date": "2025-01-02"},
             {"ticker": "BBB", "minute": "2025-01-02 22:34:00", "trade_count": 17.0, "volume": 1950.0, "dollar_volume": 39195.0, "imbalance_proxy": 0.4, "large_trade_count": 2.0, "large_trade_dollar_volume": 1400.0, "off_exchange_volume": 180.0, "date": "2025-01-02"},
             {"ticker": "BBB", "minute": "2025-01-02 22:35:00", "trade_count": 18.0, "volume": 2000.0, "dollar_volume": 40400.0, "imbalance_proxy": 0.5, "large_trade_count": 3.0, "large_trade_dollar_volume": 1500.0, "off_exchange_volume": 200.0, "date": "2025-01-02"},
+            {"ticker": "SPY", "minute": "2025-01-02 22:34:00", "trade_count": 39.0, "volume": 4998.0, "dollar_volume": 2497251.4994, "imbalance_proxy": 0.1, "large_trade_count": 1.0, "large_trade_dollar_volume": 5000.0, "off_exchange_volume": 240.0, "date": "2025-01-02"},
             {"ticker": "SPY", "minute": "2025-01-02 22:35:00", "trade_count": 40.0, "volume": 5000.0, "dollar_volume": 2500000.0, "imbalance_proxy": 0.1, "large_trade_count": 1.0, "large_trade_dollar_volume": 5000.0, "off_exchange_volume": 250.0, "date": "2025-01-02"},
         ]
     ).to_parquet(trade_flow_partition / "trade_flow_1m.parquet", index=False)
@@ -643,6 +646,73 @@ def test_build_graph_evaluation_pack_exports_review_artifacts(tmp_path):
     assert alpha_report > 0
     metadata_policy = json.loads((output_dir / "market" / "metadata_trust_policy.json").read_text(encoding="utf-8"))
     assert "safe_model_features" in metadata_policy
+    connection.close()
+
+
+def test_build_graph_evaluation_pack_synthesizes_benchmark_labels_from_trade_flow_when_missing(tmp_path):
+    graph_database_path = tmp_path / "graph.duckdb"
+    market_database_path = tmp_path / "market.duckdb"
+    metadata_csv_path = tmp_path / "input_symbols.csv"
+    output_dir = tmp_path / "evaluation_pack"
+
+    _create_graph_database(graph_database_path)
+    _create_market_database(market_database_path)
+    metadata_csv_path.write_text(
+        "\n".join(
+            [
+                "symbol,source_symbol,company_name,sector_code,industry_code,last_price,rank,market_cap,exchange,country,quote_type",
+                "AAA,AAA,Alpha,TECH,SOFT,10.1,1,100000000,NMS,United States,EQUITY",
+                "BBB,BBB,Beta,,,20.2,2,200000000,NYQ,United States,EQUITY",
+                "SPY,SPY,SPDR S&P 500 ETF Trust,ETF,INDEX,500,0,0,PCX,United States,ETF",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    connection = duckdb.connect(str(market_database_path))
+    connection.execute("DELETE FROM labels_1m WHERE symbol = 'SPY'")
+    connection.close()
+
+    labels_partition = tmp_path / "labels_1m" / "date=2025-01-02" / "labels_1m.parquet"
+    labels_frame = pd.read_parquet(labels_partition)
+    labels_frame = labels_frame.loc[labels_frame["symbol"] != "SPY"].copy()
+    labels_frame.to_parquet(labels_partition, index=False)
+
+    build_graph_evaluation_pack(
+        GraphEvaluationPackConfig(
+            graph_database_path=graph_database_path,
+            market_database_path=market_database_path,
+            metadata_csv_path=metadata_csv_path,
+            output_dir=output_dir,
+            date_start="2025-01-02",
+            date_end="2025-01-02",
+            benchmark_symbols=("SPY",),
+        )
+    )
+
+    connection = duckdb.connect()
+    symbol_labels = connection.execute(
+        """
+        SELECT
+            symbol,
+            benchmark_future_ret_1m,
+            excess_future_ret_1m
+        FROM read_parquet(?)
+        ORDER BY symbol
+        """,
+        [str(output_dir / "market" / "symbol_forward_labels" / "*.parquet")],
+    ).fetchdf()
+    assert symbol_labels["benchmark_future_ret_1m"].notna().all()
+    expected_trade_flow_benchmark_ret = (2500000.0 / 5000.0) / (2497251.4994 / 4998.0) - 1.0
+    assert round(float(symbol_labels.loc[0, "benchmark_future_ret_1m"]), 6) == round(expected_trade_flow_benchmark_ret, 6)
+    alpha_report = connection.execute(
+        """
+        SELECT MAX(sample_size)
+        FROM read_csv_auto(?)
+        """,
+        [str(output_dir / "market" / "alpha_sanity_report.csv")],
+    ).fetchone()[0]
+    assert alpha_report > 0
     connection.close()
 
 

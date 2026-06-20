@@ -1540,24 +1540,11 @@ def _export_symbol_forward_label_shards(
             columns=["symbol", "timestamp", "future_ret_1m", "future_ret_5m", "future_ret_15m", "future_ret_30m"],
         )
         labels_day = _prepare_label_review_frame(labels_day)
-        benchmark_day = labels_day.loc[labels_day["symbol"] == primary_benchmark, [
-            "symbol",
-            "label_source_timestamp",
-            "label_available_time",
-            "future_ret_1m",
-            "future_ret_5m",
-            "future_ret_15m",
-            "future_ret_30m",
-        ]].rename(
-            columns={
-                "symbol": "benchmark_symbol",
-                "label_source_timestamp": "benchmark_label_source_timestamp",
-                "label_available_time": "benchmark_label_available_time",
-                "future_ret_1m": "benchmark_future_ret_1m",
-                "future_ret_5m": "benchmark_future_ret_5m",
-                "future_ret_15m": "benchmark_future_ret_15m",
-                "future_ret_30m": "benchmark_future_ret_30m",
-            }
+        benchmark_day = _build_benchmark_label_frame(
+            trade_date=trade_date,
+            primary_benchmark=primary_benchmark,
+            labels_day=labels_day,
+            market_data_root=market_data_root,
         )
 
         merged = _merge_latest_available(
@@ -1600,6 +1587,114 @@ def _export_benchmark_series_shards(
             frame = frame.sort_values(["symbol", "timestamp"])
             frame["ret_5m"] = frame.groupby("symbol")["close"].pct_change(1)
         _write_parquet_dataframe(frame, output_dir / f"{trade_date}.parquet")
+
+
+def _build_benchmark_label_frame(
+    *,
+    trade_date: str,
+    primary_benchmark: str,
+    labels_day: pd.DataFrame,
+    market_data_root: Path,
+) -> pd.DataFrame:
+    benchmark_day = labels_day.loc[labels_day["symbol"] == primary_benchmark, [
+        "symbol",
+        "label_source_timestamp",
+        "label_available_time",
+        "future_ret_1m",
+        "future_ret_5m",
+        "future_ret_15m",
+        "future_ret_30m",
+    ]].copy()
+    if benchmark_day.empty:
+        benchmark_day = _synthesize_benchmark_labels_from_trade_flow(
+            trade_date=trade_date,
+            benchmark_symbol=primary_benchmark,
+            market_data_root=market_data_root,
+        )
+    return benchmark_day.rename(
+        columns={
+            "symbol": "benchmark_symbol",
+            "label_source_timestamp": "benchmark_label_source_timestamp",
+            "label_available_time": "benchmark_label_available_time",
+            "future_ret_1m": "benchmark_future_ret_1m",
+            "future_ret_5m": "benchmark_future_ret_5m",
+            "future_ret_15m": "benchmark_future_ret_15m",
+            "future_ret_30m": "benchmark_future_ret_30m",
+        }
+    )
+
+
+def _synthesize_benchmark_labels_from_trade_flow(
+    *,
+    trade_date: str,
+    benchmark_symbol: str,
+    market_data_root: Path,
+) -> pd.DataFrame:
+    trade_flow_day = _read_partition_parquet(
+        market_data_root,
+        "trade_flow_1m",
+        trade_date,
+        columns=["ticker", "minute", "volume", "dollar_volume", "date"],
+    )
+    if trade_flow_day.empty:
+        return pd.DataFrame(
+            columns=[
+                "symbol",
+                "label_source_timestamp",
+                "label_available_time",
+                "future_ret_1m",
+                "future_ret_5m",
+                "future_ret_15m",
+                "future_ret_30m",
+            ]
+        )
+    benchmark_flow = trade_flow_day.loc[trade_flow_day["ticker"] == benchmark_symbol].copy()
+    if benchmark_flow.empty:
+        return pd.DataFrame(
+            columns=[
+                "symbol",
+                "label_source_timestamp",
+                "label_available_time",
+                "future_ret_1m",
+                "future_ret_5m",
+                "future_ret_15m",
+                "future_ret_30m",
+            ]
+        )
+    benchmark_flow["volume"] = pd.to_numeric(benchmark_flow["volume"], errors="coerce")
+    benchmark_flow["dollar_volume"] = pd.to_numeric(benchmark_flow["dollar_volume"], errors="coerce")
+    benchmark_flow["proxy_price"] = (
+        benchmark_flow["dollar_volume"] / benchmark_flow["volume"].replace(0.0, pd.NA)
+    )
+    benchmark_flow["timestamp"] = pd.to_datetime(benchmark_flow["minute"])
+    benchmark_flow = (
+        benchmark_flow.dropna(subset=["timestamp", "proxy_price"])
+        .sort_values("timestamp")
+        .reset_index(drop=True)
+        .copy()
+    )
+    if benchmark_flow.empty:
+        return pd.DataFrame(
+            columns=[
+                "symbol",
+                "label_source_timestamp",
+                "label_available_time",
+                "future_ret_1m",
+                "future_ret_5m",
+                "future_ret_15m",
+                "future_ret_30m",
+            ]
+        )
+    labels = pd.DataFrame(
+        {
+            "symbol": benchmark_symbol,
+            "timestamp": benchmark_flow["timestamp"].to_numpy(),
+        }
+    )
+    price_series = benchmark_flow["proxy_price"].astype(float).reset_index(drop=True)
+    for horizon in (1, 5, 15, 30):
+        labels[f"future_ret_{horizon}m"] = (price_series.shift(-horizon) / price_series) - 1.0
+    return _prepare_label_review_frame(labels)
 
 
 def _export_community_snapshot_features(

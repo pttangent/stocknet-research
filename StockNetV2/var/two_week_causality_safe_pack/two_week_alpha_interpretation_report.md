@@ -2,155 +2,204 @@
 
 Date range: `2025-01-06` to `2025-01-17`
 
-Scope: interpret `market/alpha_sanity_report.csv` for the two-week causality-safe graph/community evaluation loop, without expanding the graph run.
+Scope: interpret `market/alpha_sanity_report.csv` after the benchmark-label repair, without rerunning graph construction or expanding the window.
 
 ## Executive Read
 
-The two-week causality-safe graph/community evaluation loop is complete, but `alpha_sanity_report.csv` is **not yet a valid alpha readout**.
+This pack now has a readable alpha sanity layer.
 
-The key reason is simple:
+- `alpha_sanity_report.csv` has `120` rows total.
+- `96 / 120` rows now have `sample_size > 0`.
+- Maximum `sample_size` is `27,822`.
 
-- All `120 / 120` rows in `alpha_sanity_report.csv` have `sample_size = 0`.
-- In `community_forward_labels.parquet`, every `community_mean_excess_future_ret_*` field is null.
-- The underlying market database currently has **no** `labels_1m` rows for `SPY`, `QQQ`, `IWM`, or `DIA` in this window, so benchmark-relative labels cannot be constructed.
+That means the prior blocker has been removed:
 
-That means the current report does **not** prove "no alpha". It proves:
+> this is no longer a "sample_size = 0 everywhere" report.
 
-> the community alpha evaluation chain is structurally in place, but benchmark-relative labels are not populated yet.
+What changed:
 
-## Direct Answers
+- No graph rerun was performed.
+- The repair was limited to evaluation labels.
+- Missing benchmark-relative labels for `SPY / QQQ / IWM / DIA` were synthesized for evaluation from `trade_flow_1m` when market-db benchmark labels were absent.
 
-### 1. Which features have positive RankIC?
+What this still does **not** mean:
 
-None, in the strict sense.
+- theme discovery is not validated
+- lifecycle is not validated
+- backtesting is not approved
+- TGNN is not the next step
 
-- There are no usable RankIC observations because every row has `sample_size = 0`.
-- So the correct interpretation is not "RankIC is negative"; it is "RankIC is not measurable yet".
+The right label for this stage is:
 
-### 2. Which features have positive top-bottom spread?
+> first usable two-week community alpha sanity readout
 
-None, in the strict sense.
+## What The Readout Says
 
-- Every `top_bottom_spread` is null because all alpha rows have zero usable samples.
-- Again, this is an evaluation-data blocker, not a proven failure of the layer.
+### 1. The alpha chain is now readable, but still weak and exploratory
 
-### 3. Which layers are currently just noise?
+The report now supports real RankIC / spread inspection, but the signals are still small for the large, liquid layers.
 
-From `alpha_sanity_report.csv` alone, **no layer can be formally declared noise yet**, because the report has zero usable alpha samples.
+Most broad layers have:
 
-That said, the current structural/descriptive evidence suggests:
+- low positive or near-flat RankIC
+- very small top-bottom spreads
+- hit rates near `0.50`
 
-- `large_trade_alignment_graph`: weakest candidate right now. It is very sparse (`45` communities total), tiny, and its raw forward-return profile is the worst across horizons.
-- `dtw_trade_flow_similarity_graph`: currently weak/inconclusive. Small communities, negative raw 5m/15m/30m forward returns.
-- `dtw_return_similarity_graph`: also weak/inconclusive. Small dense communities, but raw future returns are slightly negative across horizons.
+So the repaired report gives us a usable research loop, not a validated alpha claim.
 
-These are not "proven noise" yet, but they are the lowest-priority layers for theme validation right now.
+### 2. `volume_expansion_graph` is still the best theme-candidate layer
 
-### 4. Is the volume layer still the best theme candidate?
-
-Yes, **provisionally yes**.
-
-Why it still looks strongest:
-
-- `volume_expansion_graph` has much healthier community scale than flow/return-corr:
-  - `p50 size = 2`
-  - `p95 size = 18`
-  - `max size = 54`
-- It remains reasonably cohesive:
-  - `avg_density = 0.712`
-  - `avg_weight = 0.889`
-- Its descriptive raw future-return profile is the best of all layers:
-  - `avg_future_ret_5m = +0.000030`
-  - `avg_future_ret_15m = +0.000374`
-  - `avg_future_ret_30m = +0.000794`
-
-Important caution:
-
-> this is still descriptive future-return evidence, not benchmark-relative alpha evidence.
-
-So the right statement is:
-
-> volume is still the best candidate layer to promote into theme-candidate research, but it is not alpha-validated yet.
-
-### 5. Should the flow layer be formally renamed to event layer?
-
-Research-wise, yes, that rename now looks increasingly justified.
+This remains the most reasonable layer to keep pushing as a theme-discovery candidate.
 
 Why:
 
-- `flow_alignment_graph` communities are very large:
-  - `avg_members = 87.3`
-  - `p50 size = 97`
-  - `p95 size = 151`
-  - `max size = 411`
-- This behavior looks more like broad synchronous participation / regime response than compact thematic clustering.
-- Its descriptive forward-return profile is near flat to slightly negative beyond the shortest horizon.
+- it has large enough sample size to matter: max `27,103`
+- it is compact enough not to look like a market-mode bucket
+- its strongest readings still come from volume-related community features
 
-So the cleaner interpretation is:
+Current caution:
 
-> this layer is better viewed as an event/regime-alignment layer than a pure theme-discovery layer.
+- its best positive RankIC is still small
+- its best spread rows are mostly tied to `positive_flow_breadth`, not yet a clean standalone alpha story
 
-Recommended naming direction:
+So the right interpretation is:
 
-- keep the implementation name for now if needed for compatibility
-- in research docs, start describing it as an `event alignment` layer
+> volume still looks like the most promising theme-candidate layer, but the two-week alpha evidence is only mild so far.
 
-## Structural Back-Up Read
+### 3. `flow_alignment_graph` behaves more like event/regime alignment than theme structure
 
-Since alpha is currently blocked, the best fallback evidence comes from the community-level structure and raw future-return summaries.
+This repair did not change the conceptual read on flow.
 
-### Layer Shape Summary
+It now has excellent sample coverage, but:
 
-- `return_corr_graph`
-  - very broad communities
-  - `avg_members = 80.3`
-  - `p50 size = 88`
-  - likely closer to broad co-movement / beta structure than stock-picking alpha
+- best RankIC values are still small
+- spreads are small
+- the strongest factors are short-horizon breadth-style features
 
-- `flow_alignment_graph`
-  - also broad communities
-  - `avg_members = 87.3`
-  - behaves more like event/regime response
+That keeps the research interpretation consistent:
 
-- `volume_expansion_graph`
-  - compact communities
-  - `avg_members = 4.75`
-  - `p95 size = 18`
-  - best raw 15m/30m forward-return profile
+> this layer is better treated as event/regime alignment than as a primary theme layer.
 
-- `dtw_return_similarity_graph`
-  - tiny, dense communities
-  - descriptive forward returns slightly negative
+### 4. `return_corr_graph` still looks like broad co-movement / beta structure
 
-- `dtw_trade_flow_similarity_graph`
-  - tiny communities
-  - raw forward-return profile negative after 1m
+Now that sample sizes are populated, the layer remains readable but unimpressive:
+
+- large sample size
+- low signal magnitude
+- weak separation
+
+So the prior structural interpretation still holds:
+
+> return correlation is more useful as market structure context than as a direct theme-alpha layer.
+
+### 5. DTW layers are now measurable, but not yet convincing
+
+Both DTW layers now have populated samples, which is important progress.
+
+Current read:
+
+- `dtw_trade_flow_similarity_graph` is the cleaner of the two
+- its best rows come from `community_mean_volume_z_12`
+- `dtw_return_similarity_graph` remains weak and close to flat
+
+This is enough to keep DTW in research scope, but not enough to promote it.
+
+### 6. `large_trade_alignment_graph` prints the biggest numbers, but on tiny samples
+
+This layer now shows the highest headline RankIC and spread values, especially on:
+
+- `community_avg_weight_feature`
+- `30m`
+
+But the sample sizes are only around `37` to `45`.
+
+So this should be treated as:
+
+> interesting but far too sparse to trust yet
+
+It is not a stable basis for prioritization.
+
+## Direct Answers
+
+### Which layer currently looks most worth pushing?
+
+`volume_expansion_graph`
+
+Reason:
+
+- meaningful sample size
+- still the most theme-like interpretation
+- not dominated by giant broad-market structure
+
+### Which layer should be described as event/regime alignment?
+
+`flow_alignment_graph`
+
+### Which layer is more beta/co-movement context than theme?
+
+`return_corr_graph`
+
+### Did the repair prove alpha?
+
+No.
+
+It proved:
+
+- the evaluation-label blocker was real
+- the blocker is repaired for this two-week pack
+- we can now read community-level alpha sanity outputs
+
+## Best Current Readings
+
+These are the highest-signal rows in the repaired report, with the caveat that sparse layers should be discounted:
 
 - `large_trade_alignment_graph`
-  - too sparse to support strong conclusions
-  - descriptively weakest
+  - `community_avg_weight_feature`
+  - `30m`
+  - `sample_size = 37`
+  - `rank_ic = 0.380743`
+  - `top_bottom_spread = 0.009580`
 
-## What This Means
+- `dtw_trade_flow_similarity_graph`
+  - `community_mean_volume_z_12`
+  - `15m`
+  - `sample_size = 1997`
+  - `rank_ic = 0.048019`
+  - `top_bottom_spread = 0.000785`
 
-This stage should be labeled:
+- `flow_alignment_graph`
+  - `positive_ret_1m_breadth`
+  - `1m`
+  - `sample_size = 27822`
+  - `rank_ic = 0.024238`
 
-> community alpha evaluation infrastructure established, but alpha inference still blocked by missing benchmark labels
+- `volume_expansion_graph`
+  - `community_mean_volume_z_12`
+  - `1m`
+  - `sample_size = 27103`
+  - `rank_ic = 0.016348`
 
-Not:
+## Recommended Next Step
 
-> community alpha failed
+Do not rerun graph build yet.
 
-## Next Step
+Do not expand to a larger window yet.
 
-Do **not** expand the graph run yet.
+Do not move to TGNN, theme naming, or lifecycle yet.
 
-The next minimal task should be:
+The correct next task is:
 
-1. populate benchmark `labels_1m` for `SPY / QQQ / IWM / DIA` in the market database for this window
-2. regenerate only:
-   - `symbol_forward_labels`
-   - `community_forward_labels`
-   - `alpha_sanity_report.csv`
-3. re-read this same two-week pack before touching TGNN, theme naming, or lifecycle
+1. read the repaired `market/alpha_sanity_report.csv`
+2. compare feature usefulness layer by layer
+3. refine community features and evaluation metrics where signals are weak or ambiguous
+4. only then decide whether another qualification run is justified
 
-Because the graph/community artifacts are already built, this next step should be treated as an **evaluation-label repair**, not a graph rebuild.
+## Bottom Line
+
+This repair succeeded.
+
+The important outcome is not "we found alpha".
+
+The important outcome is:
+
+> the two-week causality-safe evaluation loop now produces a usable alpha sanity readout, and that gives us a real basis for the next round of community-quality research.
