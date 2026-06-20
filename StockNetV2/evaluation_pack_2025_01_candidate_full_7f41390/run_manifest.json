@@ -29,50 +29,40 @@
     "volume_expansion_graph"
   ],
   "generator": {
-    "git_head": "7f4139028e6414a3b764bf951812a2883d5a23bd",
+    "git_head": "9b9ae6a5334712fd5af29caa7f5711c1db701a69",
     "git_branch": "codex/theme-discovery-quality-lab-v2-foundation",
     "repo_root": "D:\\DEV\\stocknetwork\\StockNet",
     "repo_worktree_dirty": true,
-    "relevant_worktree_dirty": true,
+    "relevant_worktree_dirty": false,
     "dirty_paths": [
-      "StockNetV2/src/stocknetv2/application/services/theme_discovery_orchestrator.py",
-      "StockNetV2/src/stocknetv2/infrastructure/repositories/audit_repository.py",
       "data/bars_15m/date=2026-06-09/bars_15m.parquet",
       "data/bars_5m/date=2026-06-09/bars_5m.parquet",
       "data/raw_1m/date=2026-06-09/bars_1m.parquet",
       "data/stocknet_us.duckdb",
       "docs/superpowers/plans/2026-06-19-graph-evaluation-pack.md"
     ],
-    "relevant_dirty_paths": [
-      "StockNetV2/src/stocknetv2/application/services/theme_discovery_orchestrator.py",
-      "StockNetV2/src/stocknetv2/infrastructure/repositories/audit_repository.py"
-    ],
-    "generated_at_utc": "2026-06-20T05:16:09Z"
+    "relevant_dirty_paths": [],
+    "generated_at_utc": "2026-06-20T05:23:40Z"
   },
   "provenance": {
     "graph_build_commits": [
       "7f4139028e6414a3b764bf951812a2883d5a23bd"
     ],
     "evaluation_pack_generator": {
-      "git_head": "7f4139028e6414a3b764bf951812a2883d5a23bd",
+      "git_head": "9b9ae6a5334712fd5af29caa7f5711c1db701a69",
       "git_branch": "codex/theme-discovery-quality-lab-v2-foundation",
       "repo_root": "D:\\DEV\\stocknetwork\\StockNet",
       "repo_worktree_dirty": true,
-      "relevant_worktree_dirty": true,
+      "relevant_worktree_dirty": false,
       "dirty_paths": [
-        "StockNetV2/src/stocknetv2/application/services/theme_discovery_orchestrator.py",
-        "StockNetV2/src/stocknetv2/infrastructure/repositories/audit_repository.py",
         "data/bars_15m/date=2026-06-09/bars_15m.parquet",
         "data/bars_5m/date=2026-06-09/bars_5m.parquet",
         "data/raw_1m/date=2026-06-09/bars_1m.parquet",
         "data/stocknet_us.duckdb",
         "docs/superpowers/plans/2026-06-19-graph-evaluation-pack.md"
       ],
-      "relevant_dirty_paths": [
-        "StockNetV2/src/stocknetv2/application/services/theme_discovery_orchestrator.py",
-        "StockNetV2/src/stocknetv2/infrastructure/repositories/audit_repository.py"
-      ],
-      "generated_at_utc": "2026-06-20T05:16:09Z"
+      "relevant_dirty_paths": [],
+      "generated_at_utc": "2026-06-20T05:23:40Z"
     },
     "config": {
       "date_start": "2025-01-02",
@@ -146,11 +136,11 @@
     },
     "community_membership": {
       "path": "graph\\community_membership.parquet",
-      "size_bytes": 44697973
+      "size_bytes": 44625953
     },
     "community_metrics": {
       "path": "graph\\community_metrics.parquet",
-      "size_bytes": 7394136
+      "size_bytes": 7399569
     },
     "compare_layer_community_distribution": {
       "path": "compare_old_vs_new\\layer_community_distribution_compare.csv",
@@ -166,11 +156,11 @@
     },
     "node_layer_metrics": {
       "path": "graph\\node_layer_metrics",
-      "size_bytes": 398031792
+      "size_bytes": 397762220
     },
     "run_manifest": {
       "path": "run_manifest.json",
-      "size_bytes": 6990
+      "size_bytes": 6280
     },
     "snapshot_layer_diagnostics": {
       "path": "graph\\snapshot_layer_diagnostics.csv",
@@ -178,7 +168,7 @@
     },
     "symbol_forward_labels": {
       "path": "market\\symbol_forward_labels",
-      "size_bytes": 126281600
+      "size_bytes": 126265008
     },
     "symbol_master": {
       "path": "market\\symbol_master.csv",
@@ -186,7 +176,7 @@
     },
     "symbol_snapshot_features": {
       "path": "market\\symbol_snapshot_features",
-      "size_bytes": 500620891
+      "size_bytes": 500603633
     }
   }
 }
