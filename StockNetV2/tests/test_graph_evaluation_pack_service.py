@@ -515,6 +515,7 @@ def test_build_graph_evaluation_pack_exports_review_artifacts(tmp_path):
         output_dir / "market" / "community_snapshot_features.parquet",
         output_dir / "market" / "community_forward_labels.parquet",
         output_dir / "market" / "alpha_sanity_report.csv",
+        output_dir / "market" / "alpha_feature_ranking_by_layer.csv",
         output_dir / "market" / "metadata_trust_policy.json",
         output_dir / "market" / "symbol_master.csv",
         output_dir / "market" / "benchmark_series",
@@ -619,7 +620,9 @@ def test_build_graph_evaluation_pack_exports_review_artifacts(tmp_path):
             label_source_timestamp,
             label_available_time,
             future_ret_1m,
-            excess_future_ret_1m
+            excess_future_ret_1m,
+            benchmark_label_source,
+            benchmark_proxy_price_method
         FROM read_parquet(?)
         ORDER BY symbol
         """,
@@ -630,20 +633,59 @@ def test_build_graph_evaluation_pack_exports_review_artifacts(tmp_path):
     assert str(symbol_labels.loc[0, "label_available_time"]) == "2025-01-02 22:35:00"
     assert symbol_labels.loc[0, "future_ret_1m"] == 0.003
     assert round(symbol_labels.loc[0, "excess_future_ret_1m"], 6) == round(0.003 - 0.0006, 6)
+    assert symbol_labels.loc[0, "benchmark_label_source"] == "labels_1m"
+    assert pd.isna(symbol_labels.loc[0, "benchmark_proxy_price_method"])
 
-    assert connection.execute(
-        "SELECT COUNT(*) FROM read_parquet(?)",
+    community_snapshot_features = connection.execute(
+        "SELECT * FROM read_parquet(?)",
         [str(output_dir / "market" / "community_snapshot_features.parquet")],
-    ).fetchone()[0] == 1
-    assert connection.execute(
-        "SELECT COUNT(*) FROM read_parquet(?)",
+    ).fetchdf()
+    assert len(community_snapshot_features) == 1
+    assert community_snapshot_features.loc[0, "community_member_count"] == 2
+    assert community_snapshot_features.loc[0, "edge_density"] == 1.0
+    assert community_snapshot_features.loc[0, "feature_coverage_ratio"] == 1.0
+    assert pd.notna(community_snapshot_features.loc[0, "community_mean_bar_ret_5m_past"])
+    assert "community_mean_bar_ret_15m_past" in community_snapshot_features.columns
+    assert community_snapshot_features.loc[0, "positive_large_trade_breadth"] == 1.0
+
+    community_forward_labels = connection.execute(
+        "SELECT * FROM read_parquet(?)",
         [str(output_dir / "market" / "community_forward_labels.parquet")],
-    ).fetchone()[0] == 1
+    ).fetchdf()
+    assert len(community_forward_labels) == 1
+    assert community_forward_labels.loc[0, "benchmark_label_source"] == "labels_1m"
+    assert pd.isna(community_forward_labels.loc[0, "benchmark_proxy_price_method"])
+    assert round(community_forward_labels.loc[0, "community_equal_weight_excess_future_ret_1m"], 6) == round((0.0024 + 0.0014) / 2, 6)
+    assert round(community_forward_labels.loc[0, "community_mean_excess_future_ret_1m"], 6) == round((0.0024 + 0.0014) / 2, 6)
+    assert round(community_forward_labels.loc[0, "community_member_weight_excess_future_ret_1m"], 6) == round(((0.0024 * 0.9) + (0.0014 * 0.8)) / (0.9 + 0.8), 6)
+    assert round(community_forward_labels.loc[0, "community_top5_member_excess_future_ret_1m"], 6) == round((0.0024 + 0.0014) / 2, 6)
+    assert round(community_forward_labels.loc[0, "community_top10_member_excess_future_ret_1m"], 6) == round((0.0024 + 0.0014) / 2, 6)
+
     alpha_report = connection.execute(
-        "SELECT COUNT(*) FROM read_csv_auto(?)",
+        "SELECT * FROM read_csv_auto(?)",
         [str(output_dir / "market" / "alpha_sanity_report.csv")],
-    ).fetchone()[0]
-    assert alpha_report > 0
+    ).fetchdf()
+    assert len(alpha_report) > 0
+    assert {
+        "community_member_count",
+        "edge_density_feature",
+        "feature_coverage_ratio",
+        "community_mean_bar_ret_5m_past",
+        "community_mean_bar_ret_15m_past",
+        "positive_large_trade_breadth",
+    }.issubset(set(alpha_report["factor_name"]))
+    assert {
+        "equal_weight",
+        "member_weight",
+        "top5_member",
+        "top10_member",
+    }.issubset(set(alpha_report["label_variant"]))
+    alpha_ranking = connection.execute(
+        "SELECT * FROM read_csv_auto(?)",
+        [str(output_dir / "market" / "alpha_feature_ranking_by_layer.csv")],
+    ).fetchdf()
+    assert len(alpha_ranking) == len(alpha_report)
+    assert {"score", "confidence_bucket", "research_action", "layer_role"}.issubset(alpha_ranking.columns)
     metadata_policy = json.loads((output_dir / "market" / "metadata_trust_policy.json").read_text(encoding="utf-8"))
     assert "safe_model_features" in metadata_policy
     connection.close()
@@ -696,7 +738,9 @@ def test_build_graph_evaluation_pack_synthesizes_benchmark_labels_from_trade_flo
         SELECT
             symbol,
             benchmark_future_ret_1m,
-            excess_future_ret_1m
+            excess_future_ret_1m,
+            benchmark_label_source,
+            benchmark_proxy_price_method
         FROM read_parquet(?)
         ORDER BY symbol
         """,
@@ -705,6 +749,8 @@ def test_build_graph_evaluation_pack_synthesizes_benchmark_labels_from_trade_flo
     assert symbol_labels["benchmark_future_ret_1m"].notna().all()
     expected_trade_flow_benchmark_ret = (2500000.0 / 5000.0) / (2497251.4994 / 4998.0) - 1.0
     assert round(float(symbol_labels.loc[0, "benchmark_future_ret_1m"]), 6) == round(expected_trade_flow_benchmark_ret, 6)
+    assert symbol_labels["benchmark_label_source"].eq("trade_flow_proxy").all()
+    assert symbol_labels["benchmark_proxy_price_method"].eq("dollar_volume_over_volume").all()
     alpha_report = connection.execute(
         """
         SELECT MAX(sample_size)
@@ -714,6 +760,85 @@ def test_build_graph_evaluation_pack_synthesizes_benchmark_labels_from_trade_flo
     ).fetchone()[0]
     assert alpha_report > 0
     connection.close()
+
+
+def test_export_alpha_feature_ranking_report_scores_confidence_and_actions(tmp_path):
+    alpha_report_path = tmp_path / "alpha_sanity_report.csv"
+    ranking_output_path = tmp_path / "alpha_feature_ranking_by_layer.csv"
+    pd.DataFrame(
+        [
+            {
+                "graph_layer": "volume_expansion_graph",
+                "factor_name": "community_mean_volume_z_12",
+                "label_horizon": "15m",
+                "label_variant": "equal_weight",
+                "sample_size": 12000,
+                "rank_ic": 0.05,
+                "top_decile_mean": 0.0020,
+                "bottom_decile_mean": 0.0010,
+                "top_bottom_spread": 0.0010,
+                "top_decile_hit_rate": 0.60,
+            },
+            {
+                "graph_layer": "flow_alignment_graph",
+                "factor_name": "positive_flow_breadth",
+                "label_horizon": "5m",
+                "label_variant": "equal_weight",
+                "sample_size": 2200,
+                "rank_ic": 0.03,
+                "top_decile_mean": 0.0007,
+                "bottom_decile_mean": 0.0002,
+                "top_bottom_spread": 0.0005,
+                "top_decile_hit_rate": 0.55,
+            },
+                {
+                    "graph_layer": "return_corr_graph",
+                    "factor_name": "edge_density_feature",
+                    "label_horizon": "15m",
+                    "label_variant": "equal_weight",
+                    "sample_size": 15000,
+                "rank_ic": 0.02,
+                "top_decile_mean": -0.0003,
+                "bottom_decile_mean": 0.0001,
+                "top_bottom_spread": -0.0004,
+                "top_decile_hit_rate": 0.47,
+            },
+            {
+                "graph_layer": "large_trade_alignment_graph",
+                "factor_name": "community_avg_weight_feature",
+                "label_horizon": "30m",
+                "label_variant": "top5_member",
+                "sample_size": 120,
+                "rank_ic": 0.40,
+                "top_decile_mean": 0.0100,
+                "bottom_decile_mean": 0.0010,
+                "top_bottom_spread": 0.0090,
+                "top_decile_hit_rate": 0.75,
+            },
+        ]
+    ).to_csv(alpha_report_path, index=False)
+
+    graph_pack_service._export_alpha_feature_ranking_report(alpha_report_path, ranking_output_path)
+
+    ranking = pd.read_csv(ranking_output_path)
+    volume_row = ranking.loc[ranking["graph_layer"] == "volume_expansion_graph"].iloc[0]
+    assert volume_row["confidence_bucket"] == "strong_sample"
+    assert volume_row["layer_role"] == "theme_candidate_layer"
+    assert volume_row["research_action"] == "prioritize_for_next_round"
+    assert volume_row["score"] > 0
+
+    flow_row = ranking.loc[ranking["graph_layer"] == "flow_alignment_graph"].iloc[0]
+    assert flow_row["confidence_bucket"] == "watch"
+    assert flow_row["layer_role"] == "event_alignment_layer"
+
+    return_corr_row = ranking.loc[ranking["graph_layer"] == "return_corr_graph"].iloc[0]
+    assert return_corr_row["confidence_bucket"] == "strong_sample"
+    assert return_corr_row["score"] < 0
+    assert return_corr_row["research_action"] == "downgrade"
+
+    large_trade_row = ranking.loc[ranking["graph_layer"] == "large_trade_alignment_graph"].iloc[0]
+    assert large_trade_row["confidence_bucket"] == "ignore"
+    assert large_trade_row["research_action"] == "ignore_sparse"
 
 
 def test_resolve_generator_metadata_tolerates_output_dir_outside_repo(tmp_path, monkeypatch):

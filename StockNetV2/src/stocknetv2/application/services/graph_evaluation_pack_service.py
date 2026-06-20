@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import os
 import platform
 import shutil
@@ -19,6 +20,36 @@ from stocknetv2.application.services.symbol_metadata_service import (
     empty_symbol_metadata_frame,
     read_symbol_metadata_csv,
 )
+
+
+_BENCHMARK_PROXY_PRICE_METHOD = "dollar_volume_over_volume"
+_ALPHA_FACTOR_COLUMNS = [
+    "community_mean_volume_z_12",
+    "community_mean_flow_impulse_score",
+    "positive_ret_1m_breadth",
+    "positive_flow_breadth",
+    "community_avg_weight_feature",
+    "community_member_count",
+    "edge_density_feature",
+    "feature_coverage_ratio",
+    "community_mean_bar_ret_5m_past",
+    "community_mean_bar_ret_15m_past",
+    "positive_large_trade_breadth",
+]
+_ALPHA_LABEL_VARIANTS = [
+    ("equal_weight", "community_equal_weight_excess_future_ret"),
+    ("member_weight", "community_member_weight_excess_future_ret"),
+    ("top5_member", "community_top5_member_excess_future_ret"),
+    ("top10_member", "community_top10_member_excess_future_ret"),
+]
+_LAYER_RESEARCH_ROLES = {
+    "volume_expansion_graph": "theme_candidate_layer",
+    "flow_alignment_graph": "event_alignment_layer",
+    "return_corr_graph": "beta_context_layer",
+    "dtw_trade_flow_similarity_graph": "pair_flow_leadlag_candidate",
+    "dtw_return_similarity_graph": "weak_pair_candidate",
+    "large_trade_alignment_graph": "sparse_event_flag",
+}
 
 
 @dataclass(frozen=True)
@@ -776,6 +807,11 @@ def build_graph_evaluation_pack(
             artifact_paths["community_forward_labels"],
             artifact_paths["alpha_sanity_report"],
         )
+        artifact_paths["alpha_feature_ranking_by_layer"] = market_output_dir / "alpha_feature_ranking_by_layer.csv"
+        _export_alpha_feature_ranking_report(
+            artifact_paths["alpha_sanity_report"],
+            artifact_paths["alpha_feature_ranking_by_layer"],
+        )
         artifact_paths["benchmark_series"] = market_output_dir / "benchmark_series"
         _export_benchmark_series_shards(
             trade_dates,
@@ -1113,7 +1149,7 @@ def _write_readme(
         "2. Use `graph/community_metrics.parquet` and `graph/community_membership.parquet` to inspect whether large communities are real themes, sector baskets, or market-mode clusters.\n"
         "3. Use `market/symbol_snapshot_features/` to inspect the causality-safe state of each member at the snapshot.\n"
         f"4. Use `market/symbol_forward_labels/` to check whether members outperformed `{primary_benchmark}` over the next 1m/5m/15m/30m windows.\n"
-        "5. Use `market/community_snapshot_features.parquet`, `market/community_forward_labels.parquet`, and `market/alpha_sanity_report.csv` for the first community-level alpha sanity pass.\n"
+        "5. Use `market/community_snapshot_features.parquet`, `market/community_forward_labels.parquet`, `market/alpha_sanity_report.csv`, and `market/alpha_feature_ranking_by_layer.csv` for the first community-level alpha sanity pass.\n"
         "6. Use `graph/snapshot_layer_diagnostics.csv` to find pathological layers, giant clusters, or snapshots where one layer dominates the universe.\n\n"
         "## Time Notes\n\n"
         "- `snapshot_clock_code` is the canonical market-clock label from the snapshot id suffix.\n"
@@ -1121,6 +1157,7 @@ def _write_readme(
         "- `available_minutes_since_open` is the safest field for intraday sequencing if timezone display looks inconsistent.\n"
         "- Symbol features now carry `graph_input_available_time` and trade-flow `flow_available_time`; they are only joined into a snapshot when `available_time <= snapshot_timestamp`.\n"
         "- Forward labels now carry `label_available_time` and are aligned from the last completed 1m bucket available at the snapshot, not from unfinished 1m bars.\n"
+        "- Benchmark-relative labels now carry provenance: `benchmark_label_source` tells you whether they came from `labels_1m` or a `trade_flow_1m` proxy fallback.\n"
         "- Metadata is exported for post-hoc validation only; see `market/metadata_trust_policy.json` before using any field in modeling.\n\n"
         "## Files\n\n"
         "- `graph/all_edges/`: thresholded graph edges, sharded by trade date as parquet.\n"
@@ -1134,6 +1171,7 @@ def _write_readme(
         "- `market/community_snapshot_features.parquet`: community-level feature aggregates built only from snapshot-time-available symbol inputs.\n"
         "- `market/community_forward_labels.parquet`: community-level forward labels kept physically separate from features.\n"
         "- `market/alpha_sanity_report.csv`: first-pass RankIC / decile / hit-rate summary for community-level evaluation.\n"
+        "- `market/alpha_feature_ranking_by_layer.csv`: per-layer factor ranking with sample-size-aware confidence buckets and research actions.\n"
         "- `market/metadata_trust_policy.json`: allowed post-hoc validation use vs modeling restrictions for metadata fields.\n"
         "- `market/symbol_master.csv`: symbol metadata used for joins.\n"
         "- `market/benchmark_series/`: benchmark bar series for context, sharded by trade date as parquet.\n"
@@ -1526,6 +1564,8 @@ def _export_symbol_forward_label_shards(
         "benchmark_future_ret_5m",
         "benchmark_future_ret_15m",
         "benchmark_future_ret_30m",
+        "benchmark_label_source",
+        "benchmark_proxy_price_method",
     ]
     for trade_date in trade_dates:
         active_day = pd.read_parquet(active_snapshot_key_dir / f"{trade_date}.parquet")
@@ -1561,6 +1601,7 @@ def _export_symbol_forward_label_shards(
             right_time_column="benchmark_label_available_time",
         )
         _ensure_columns(merged, benchmark_columns)
+        merged["benchmark_label_source"] = merged["benchmark_label_source"].fillna("missing")
         merged["excess_future_ret_1m"] = merged["future_ret_1m"] - merged["benchmark_future_ret_1m"]
         merged["excess_future_ret_5m"] = merged["future_ret_5m"] - merged["benchmark_future_ret_5m"]
         merged["excess_future_ret_15m"] = merged["future_ret_15m"] - merged["benchmark_future_ret_15m"]
@@ -1611,6 +1652,9 @@ def _build_benchmark_label_frame(
             benchmark_symbol=primary_benchmark,
             market_data_root=market_data_root,
         )
+    else:
+        benchmark_day["benchmark_label_source"] = "labels_1m"
+        benchmark_day["benchmark_proxy_price_method"] = pd.NA
     return benchmark_day.rename(
         columns={
             "symbol": "benchmark_symbol",
@@ -1646,6 +1690,8 @@ def _synthesize_benchmark_labels_from_trade_flow(
                 "future_ret_5m",
                 "future_ret_15m",
                 "future_ret_30m",
+                "benchmark_label_source",
+                "benchmark_proxy_price_method",
             ]
         )
     benchmark_flow = trade_flow_day.loc[trade_flow_day["ticker"] == benchmark_symbol].copy()
@@ -1659,6 +1705,8 @@ def _synthesize_benchmark_labels_from_trade_flow(
                 "future_ret_5m",
                 "future_ret_15m",
                 "future_ret_30m",
+                "benchmark_label_source",
+                "benchmark_proxy_price_method",
             ]
         )
     benchmark_flow["volume"] = pd.to_numeric(benchmark_flow["volume"], errors="coerce")
@@ -1683,6 +1731,8 @@ def _synthesize_benchmark_labels_from_trade_flow(
                 "future_ret_5m",
                 "future_ret_15m",
                 "future_ret_30m",
+                "benchmark_label_source",
+                "benchmark_proxy_price_method",
             ]
         )
     labels = pd.DataFrame(
@@ -1694,7 +1744,10 @@ def _synthesize_benchmark_labels_from_trade_flow(
     price_series = benchmark_flow["proxy_price"].astype(float).reset_index(drop=True)
     for horizon in (1, 5, 15, 30):
         labels[f"future_ret_{horizon}m"] = (price_series.shift(-horizon) / price_series) - 1.0
-    return _prepare_label_review_frame(labels)
+    labels = _prepare_label_review_frame(labels)
+    labels["benchmark_label_source"] = "trade_flow_proxy"
+    labels["benchmark_proxy_price_method"] = _BENCHMARK_PROXY_PRICE_METHOD
+    return labels
 
 
 def _export_community_snapshot_features(
@@ -1841,6 +1894,8 @@ def _export_community_forward_labels(
                 m.edge_density,
                 m.community_avg_weight,
                 m.symbol,
+                m.member_rank,
+                m.member_weight,
                 sf.label_source_timestamp,
                 sf.label_available_time,
                 sf.future_ret_1m,
@@ -1850,7 +1905,9 @@ def _export_community_forward_labels(
                 sf.excess_future_ret_1m,
                 sf.excess_future_ret_5m,
                 sf.excess_future_ret_15m,
-                sf.excess_future_ret_30m
+                sf.excess_future_ret_30m,
+                CAST(sf.benchmark_label_source AS VARCHAR) AS benchmark_label_source,
+                CAST(sf.benchmark_proxy_price_method AS VARCHAR) AS benchmark_proxy_price_method
             FROM read_parquet('{_escape_sql_literal(str(community_membership_path))}') m
             LEFT JOIN read_parquet('{_escape_sql_literal(str(symbol_forward_label_dir / "*.parquet"))}') sf
                 ON sf.snapshot_id = m.snapshot_id
@@ -1874,14 +1931,92 @@ def _export_community_forward_labels(
             AVG(future_ret_5m) AS community_mean_future_ret_5m,
             AVG(future_ret_15m) AS community_mean_future_ret_15m,
             AVG(future_ret_30m) AS community_mean_future_ret_30m,
+            AVG(excess_future_ret_1m) AS community_equal_weight_excess_future_ret_1m,
+            AVG(excess_future_ret_5m) AS community_equal_weight_excess_future_ret_5m,
+            AVG(excess_future_ret_15m) AS community_equal_weight_excess_future_ret_15m,
+            AVG(excess_future_ret_30m) AS community_equal_weight_excess_future_ret_30m,
             AVG(excess_future_ret_1m) AS community_mean_excess_future_ret_1m,
             AVG(excess_future_ret_5m) AS community_mean_excess_future_ret_5m,
             AVG(excess_future_ret_15m) AS community_mean_excess_future_ret_15m,
             AVG(excess_future_ret_30m) AS community_mean_excess_future_ret_30m,
+            SUM(
+                CASE
+                    WHEN excess_future_ret_1m IS NOT NULL AND member_weight IS NOT NULL AND member_weight > 0 THEN excess_future_ret_1m * member_weight
+                    ELSE 0
+                END
+            ) / NULLIF(
+                SUM(
+                    CASE
+                        WHEN excess_future_ret_1m IS NOT NULL AND member_weight IS NOT NULL AND member_weight > 0 THEN member_weight
+                        ELSE 0
+                    END
+                ),
+                0
+            ) AS community_member_weight_excess_future_ret_1m,
+            SUM(
+                CASE
+                    WHEN excess_future_ret_5m IS NOT NULL AND member_weight IS NOT NULL AND member_weight > 0 THEN excess_future_ret_5m * member_weight
+                    ELSE 0
+                END
+            ) / NULLIF(
+                SUM(
+                    CASE
+                        WHEN excess_future_ret_5m IS NOT NULL AND member_weight IS NOT NULL AND member_weight > 0 THEN member_weight
+                        ELSE 0
+                    END
+                ),
+                0
+            ) AS community_member_weight_excess_future_ret_5m,
+            SUM(
+                CASE
+                    WHEN excess_future_ret_15m IS NOT NULL AND member_weight IS NOT NULL AND member_weight > 0 THEN excess_future_ret_15m * member_weight
+                    ELSE 0
+                END
+            ) / NULLIF(
+                SUM(
+                    CASE
+                        WHEN excess_future_ret_15m IS NOT NULL AND member_weight IS NOT NULL AND member_weight > 0 THEN member_weight
+                        ELSE 0
+                    END
+                ),
+                0
+            ) AS community_member_weight_excess_future_ret_15m,
+            SUM(
+                CASE
+                    WHEN excess_future_ret_30m IS NOT NULL AND member_weight IS NOT NULL AND member_weight > 0 THEN excess_future_ret_30m * member_weight
+                    ELSE 0
+                END
+            ) / NULLIF(
+                SUM(
+                    CASE
+                        WHEN excess_future_ret_30m IS NOT NULL AND member_weight IS NOT NULL AND member_weight > 0 THEN member_weight
+                        ELSE 0
+                    END
+                ),
+                0
+            ) AS community_member_weight_excess_future_ret_30m,
+            AVG(CASE WHEN member_rank <= 5 THEN excess_future_ret_1m END) AS community_top5_member_excess_future_ret_1m,
+            AVG(CASE WHEN member_rank <= 5 THEN excess_future_ret_5m END) AS community_top5_member_excess_future_ret_5m,
+            AVG(CASE WHEN member_rank <= 5 THEN excess_future_ret_15m END) AS community_top5_member_excess_future_ret_15m,
+            AVG(CASE WHEN member_rank <= 5 THEN excess_future_ret_30m END) AS community_top5_member_excess_future_ret_30m,
+            AVG(CASE WHEN member_rank <= 10 THEN excess_future_ret_1m END) AS community_top10_member_excess_future_ret_1m,
+            AVG(CASE WHEN member_rank <= 10 THEN excess_future_ret_5m END) AS community_top10_member_excess_future_ret_5m,
+            AVG(CASE WHEN member_rank <= 10 THEN excess_future_ret_15m END) AS community_top10_member_excess_future_ret_15m,
+            AVG(CASE WHEN member_rank <= 10 THEN excess_future_ret_30m END) AS community_top10_member_excess_future_ret_30m,
             AVG(CASE WHEN future_ret_1m > 0 THEN 1.0 ELSE 0.0 END) AS positive_future_ret_1m_breadth,
             AVG(CASE WHEN future_ret_5m > 0 THEN 1.0 ELSE 0.0 END) AS positive_future_ret_5m_breadth,
             AVG(CASE WHEN future_ret_15m > 0 THEN 1.0 ELSE 0.0 END) AS positive_future_ret_15m_breadth,
             AVG(CASE WHEN future_ret_30m > 0 THEN 1.0 ELSE 0.0 END) AS positive_future_ret_30m_breadth,
+            CASE
+                WHEN COUNT(DISTINCT CASE WHEN benchmark_label_source IS NOT NULL THEN benchmark_label_source END) = 0 THEN 'missing'
+                WHEN COUNT(DISTINCT CASE WHEN benchmark_label_source IS NOT NULL THEN benchmark_label_source END) = 1 THEN MAX(benchmark_label_source)
+                ELSE 'mixed'
+            END AS benchmark_label_source,
+            CASE
+                WHEN COUNT(DISTINCT CASE WHEN benchmark_proxy_price_method IS NOT NULL THEN benchmark_proxy_price_method END) = 0 THEN CAST(NULL AS VARCHAR)
+                WHEN COUNT(DISTINCT CASE WHEN benchmark_proxy_price_method IS NOT NULL THEN benchmark_proxy_price_method END) = 1 THEN MAX(benchmark_proxy_price_method)
+                ELSE 'mixed'
+            END AS benchmark_proxy_price_method,
             MIN(label_source_timestamp) AS earliest_label_source_timestamp,
             MAX(label_source_timestamp) AS latest_label_source_timestamp,
             MAX(label_available_time) AS latest_label_available_time
@@ -1906,25 +2041,23 @@ def _export_alpha_sanity_report(
         on=["snapshot_id", "graph_layer", "layer_community_id"],
         suffixes=("_feature", "_label"),
     )
-    factors = [
-        "community_mean_volume_z_12",
-        "community_mean_flow_impulse_score",
-        "positive_ret_1m_breadth",
-        "positive_flow_breadth",
-        "community_avg_weight_feature",
-    ]
-    horizons = [
-        ("1m", "community_mean_excess_future_ret_1m"),
-        ("5m", "community_mean_excess_future_ret_5m"),
-        ("15m", "community_mean_excess_future_ret_15m"),
-        ("30m", "community_mean_excess_future_ret_30m"),
+    if "community_member_count_feature" in merged.columns:
+        merged["community_member_count"] = merged["community_member_count_feature"]
+    if "edge_density_feature" in merged.columns:
+        merged["edge_density_feature"] = merged["edge_density_feature"]
+    elif "edge_density" in merged.columns:
+        merged["edge_density_feature"] = merged["edge_density"]
+    target_variants = [
+        (label_variant, horizon_name, f"{column_prefix}_{horizon_name}")
+        for label_variant, column_prefix in _ALPHA_LABEL_VARIANTS
+        for horizon_name in ("1m", "5m", "15m", "30m")
     ]
     rows: list[dict[str, Any]] = []
     for graph_layer, layer_frame in merged.groupby("graph_layer", dropna=False):
-        for factor_name in factors:
+        for factor_name in _ALPHA_FACTOR_COLUMNS:
             if factor_name not in layer_frame.columns:
                 continue
-            for horizon_name, target_name in horizons:
+            for label_variant, horizon_name, target_name in target_variants:
                 if target_name not in layer_frame.columns:
                     continue
                 sample = layer_frame[[factor_name, target_name]].dropna()
@@ -1934,6 +2067,7 @@ def _export_alpha_sanity_report(
                             "graph_layer": graph_layer,
                             "factor_name": factor_name,
                             "label_horizon": horizon_name,
+                            "label_variant": label_variant,
                             "sample_size": 0,
                             "rank_ic": None,
                             "top_decile_mean": None,
@@ -1949,19 +2083,98 @@ def _export_alpha_sanity_report(
                 bottom = sorted_sample.head(decile_size)[target_name]
                 top = sorted_sample.tail(decile_size)[target_name]
                 rows.append(
-                    {
-                        "graph_layer": graph_layer,
-                        "factor_name": factor_name,
-                        "label_horizon": horizon_name,
-                        "sample_size": int(len(sample)),
-                        "rank_ic": None if pd.isna(rank_ic) else float(rank_ic),
-                        "top_decile_mean": float(top.mean()),
+                        {
+                            "graph_layer": graph_layer,
+                            "factor_name": factor_name,
+                            "label_horizon": horizon_name,
+                            "label_variant": label_variant,
+                            "sample_size": int(len(sample)),
+                            "rank_ic": None if pd.isna(rank_ic) else float(rank_ic),
+                            "top_decile_mean": float(top.mean()),
                         "bottom_decile_mean": float(bottom.mean()),
                         "top_bottom_spread": float(top.mean() - bottom.mean()),
                         "top_decile_hit_rate": float((top > 0).mean()),
                     }
                 )
     pd.DataFrame(rows).to_csv(output_path, index=False)
+
+
+def _export_alpha_feature_ranking_report(
+    alpha_sanity_report_path: Path,
+    output_path: Path,
+) -> None:
+    report = pd.read_csv(alpha_sanity_report_path)
+    if report.empty:
+        pd.DataFrame(
+            columns=[
+                "graph_layer",
+                "layer_role",
+                "factor_name",
+                "label_horizon",
+                "label_variant",
+                "sample_size",
+                "rank_ic",
+                "top_bottom_spread",
+                "top_decile_hit_rate",
+                "score",
+                "confidence_bucket",
+                "research_action",
+            ]
+        ).to_csv(output_path, index=False)
+        return
+    ranking = report.copy()
+    ranking["sample_size"] = pd.to_numeric(ranking["sample_size"], errors="coerce").fillna(0).astype(int)
+    ranking["rank_ic"] = pd.to_numeric(ranking["rank_ic"], errors="coerce")
+    ranking["top_bottom_spread"] = pd.to_numeric(ranking["top_bottom_spread"], errors="coerce")
+    ranking["top_decile_hit_rate"] = pd.to_numeric(ranking["top_decile_hit_rate"], errors="coerce")
+    ranking["layer_role"] = ranking["graph_layer"].map(_LAYER_RESEARCH_ROLES).fillna("unclassified_layer")
+    ranking["score"] = ranking.apply(_alpha_ranking_score, axis=1)
+    ranking["confidence_bucket"] = ranking["sample_size"].apply(_alpha_confidence_bucket)
+    ranking["research_action"] = ranking.apply(_alpha_research_action, axis=1)
+    ranking = ranking.sort_values(
+        ["score", "sample_size", "graph_layer", "factor_name", "label_variant", "label_horizon"],
+        ascending=[False, False, True, True, True, True],
+    ).reset_index(drop=True)
+    ranking.to_csv(output_path, index=False)
+
+
+def _alpha_ranking_score(row: pd.Series) -> float:
+    rank_ic = row.get("rank_ic")
+    spread = row.get("top_bottom_spread")
+    sample_size = int(row.get("sample_size", 0) or 0)
+    if pd.isna(rank_ic) or pd.isna(spread) or sample_size <= 0:
+        return 0.0
+    spread_sign = 1.0 if spread > 0 else -1.0 if spread < 0 else 0.0
+    return float(abs(rank_ic) * math.log10(sample_size + 1) * spread_sign)
+
+
+def _alpha_confidence_bucket(sample_size: int) -> str:
+    if sample_size < 500:
+        return "ignore"
+    if sample_size < 3000:
+        return "watch"
+    if sample_size <= 10000:
+        return "usable"
+    return "strong_sample"
+
+
+def _alpha_research_action(row: pd.Series) -> str:
+    sample_size = int(row.get("sample_size", 0) or 0)
+    score = float(row.get("score", 0.0) or 0.0)
+    layer_role = row.get("layer_role")
+    if sample_size < 500:
+        return "ignore_sparse"
+    if pd.isna(row.get("rank_ic")) or pd.isna(row.get("top_bottom_spread")):
+        return "insufficient_signal"
+    if score > 0:
+        if sample_size > 10000 and layer_role == "theme_candidate_layer":
+            return "prioritize_for_next_round"
+        if sample_size >= 3000:
+            return "keep_for_next_round"
+        return "watch"
+    if sample_size >= 3000:
+        return "downgrade"
+    return "watch"
 
 
 def _write_metadata_trust_policy(output_path: Path) -> None:
