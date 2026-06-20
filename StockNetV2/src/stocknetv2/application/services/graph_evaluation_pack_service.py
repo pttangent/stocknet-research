@@ -1511,6 +1511,22 @@ def _export_symbol_forward_label_shards(
     market_data_root: Path,
 ) -> None:
     output_dir.mkdir(parents=True, exist_ok=True)
+    label_columns = [
+        "label_source_timestamp",
+        "label_available_time",
+        "future_ret_1m",
+        "future_ret_5m",
+        "future_ret_15m",
+        "future_ret_30m",
+    ]
+    benchmark_columns = [
+        "benchmark_label_source_timestamp",
+        "benchmark_label_available_time",
+        "benchmark_future_ret_1m",
+        "benchmark_future_ret_5m",
+        "benchmark_future_ret_15m",
+        "benchmark_future_ret_30m",
+    ]
     for trade_date in trade_dates:
         active_day = pd.read_parquet(active_snapshot_key_dir / f"{trade_date}.parquet")
         if active_day.empty:
@@ -1549,6 +1565,7 @@ def _export_symbol_forward_label_shards(
             labels_day,
             right_time_column="label_available_time",
         )
+        _ensure_columns(merged, label_columns)
         merged.insert(5, "benchmark_symbol", primary_benchmark)
         merged = _merge_latest_available(
             merged,
@@ -1556,6 +1573,7 @@ def _export_symbol_forward_label_shards(
             by_column="benchmark_symbol",
             right_time_column="benchmark_label_available_time",
         )
+        _ensure_columns(merged, benchmark_columns)
         merged["excess_future_ret_1m"] = merged["future_ret_1m"] - merged["benchmark_future_ret_1m"]
         merged["excess_future_ret_5m"] = merged["future_ret_5m"] - merged["benchmark_future_ret_5m"]
         merged["excess_future_ret_15m"] = merged["future_ret_15m"] - merged["benchmark_future_ret_15m"]
@@ -1589,6 +1607,49 @@ def _export_community_snapshot_features(
     symbol_snapshot_feature_dir: Path,
     output_path: Path,
 ) -> None:
+    available_columns = _parquet_dataset_columns(symbol_snapshot_feature_dir)
+    feature_timestamp_expr = _select_parquet_column_expr(
+        available_columns,
+        "sf",
+        ["graph_input_feature_timestamp", "flow_feature_timestamp", "bar_timestamp", "timestamp"],
+        "graph_input_feature_timestamp",
+    )
+    feature_available_expr = _select_parquet_column_expr(
+        available_columns,
+        "sf",
+        ["graph_input_available_time", "flow_available_time", "bar_available_time"],
+        "graph_input_available_time",
+    )
+    ret_expr = _select_parquet_column_expr(
+        available_columns,
+        "sf",
+        ["ret_1m", "bar_ret_5m_past"],
+        "ret_1m",
+    )
+    volume_expr = _select_parquet_column_expr(
+        available_columns,
+        "sf",
+        ["volume_z_12", "bar_volume_cs_z"],
+        "volume_z_12",
+    )
+    imbalance_expr = _select_parquet_column_expr(
+        available_columns,
+        "sf",
+        ["imbalance_z", "flow_imbalance_proxy"],
+        "imbalance_z",
+    )
+    large_trade_expr = _select_parquet_column_expr(
+        available_columns,
+        "sf",
+        ["large_trade_ratio_z"],
+        "large_trade_ratio_z",
+    )
+    flow_impulse_expr = _select_parquet_column_expr(
+        available_columns,
+        "sf",
+        ["flow_impulse_score"],
+        "flow_impulse_score",
+    )
     connection = duckdb.connect()
     try:
         query = f"""
@@ -1608,13 +1669,13 @@ def _export_community_snapshot_features(
                 m.symbol,
                 m.member_rank,
                 m.member_weight,
-                sf.graph_input_feature_timestamp,
-                sf.graph_input_available_time,
-                sf.ret_1m,
-                sf.volume_z_12,
-                sf.imbalance_z,
-                sf.large_trade_ratio_z,
-                sf.flow_impulse_score,
+                {feature_timestamp_expr},
+                {feature_available_expr},
+                {ret_expr},
+                {volume_expr},
+                {imbalance_expr},
+                {large_trade_expr},
+                {flow_impulse_expr},
                 sf.bar_ret_5m_past,
                 sf.bar_ret_15m_past,
                 sf.market_cap,
@@ -1936,6 +1997,10 @@ def _merge_latest_available(
     left_working = left.copy()
     left_working["_merge_row_order"] = range(len(left_working))
     right_working = right.copy()
+    if by_column in left_working.columns:
+        left_working[by_column] = pd.Series(left_working[by_column], dtype="string[python]")
+    if by_column in right_working.columns:
+        right_working[by_column] = pd.Series(right_working[by_column], dtype="string[python]")
     left_sorted = left_working.sort_values(["snapshot_timestamp", by_column]).reset_index(drop=True)
     right_sorted = right_working.sort_values([right_time_column, by_column]).reset_index(drop=True)
     merged = pd.merge_asof(
@@ -1948,6 +2013,33 @@ def _merge_latest_available(
         allow_exact_matches=True,
     )
     return merged.sort_values("_merge_row_order").drop(columns=["_merge_row_order"]).reset_index(drop=True)
+
+
+def _ensure_columns(frame: pd.DataFrame, columns: list[str]) -> None:
+    for column in columns:
+        if column not in frame.columns:
+            frame[column] = pd.NA
+
+
+def _parquet_dataset_columns(path: Path) -> set[str]:
+    files = sorted(path.glob("*.parquet")) if path.is_dir() else [path]
+    existing_files = [file_path for file_path in files if file_path.exists()]
+    if not existing_files:
+        return set()
+    sample = pd.read_parquet(existing_files[0])
+    return set(str(column) for column in sample.columns)
+
+
+def _select_parquet_column_expr(
+    available_columns: set[str],
+    table_alias: str,
+    candidates: list[str],
+    output_alias: str,
+) -> str:
+    for candidate in candidates:
+        if candidate in available_columns:
+            return f"{table_alias}.{candidate} AS {output_alias}"
+    return f"NULL AS {output_alias}"
 
 
 def _copy_query_to_parquet(
