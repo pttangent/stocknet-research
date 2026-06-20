@@ -424,10 +424,10 @@ def test_build_graph_evaluation_pack_exports_review_artifacts(tmp_path):
     metadata_csv_path.write_text(
         "\n".join(
             [
-                "Ticker,Name,SectorCode,IndCode,Last,Rank,MktCap",
-                "AAA,Alpha,TECH,SOFT,10.1,1,100000000",
-                "BBB,Beta,TECH,SEMI,20.2,2,200000000",
-                "SPY,SPY,ETF,INDEX,500,0,0",
+                "symbol,source_symbol,company_name,sector_code,industry_code,last_price,rank,market_cap,exchange,country,quote_type",
+                "AAA,AAA,Alpha,TECH,SOFT,10.1,1,100000000,NMS,United States,EQUITY",
+                "BBB,BBB,Beta,,,20.2,2,200000000,NYQ,United States,EQUITY",
+                "SPY,SPY,SPDR S&P 500 ETF Trust,ETF,INDEX,500,0,0,PCX,United States,ETF",
             ]
         ),
         encoding="utf-8",
@@ -465,6 +465,7 @@ def test_build_graph_evaluation_pack_exports_review_artifacts(tmp_path):
         output_dir / "graph" / "community_metrics.parquet",
         output_dir / "graph" / "community_membership.parquet",
         output_dir / "graph" / "layer_review_candidates.csv",
+        output_dir / "graph" / "metadata_coverage_report.csv",
         output_dir / "market" / "symbol_snapshot_features",
         output_dir / "market" / "symbol_forward_labels",
         output_dir / "market" / "symbol_master.csv",
@@ -496,6 +497,49 @@ def test_build_graph_evaluation_pack_exports_review_artifacts(tmp_path):
         "SELECT COUNT(*) FROM read_parquet(?)",
         [str(output_dir / "graph" / "community_membership.parquet")],
     ).fetchone()[0] == 2
+    community_metrics = connection.execute(
+        """
+        SELECT
+            top_sector,
+            top_sector_ratio,
+            known_sector_ratio,
+            top_industry,
+            top_industry_ratio,
+            known_industry_ratio,
+            known_market_cap_ratio
+        FROM read_parquet(?)
+        """,
+        [str(output_dir / "graph" / "community_metrics.parquet")],
+    ).fetchdf()
+    assert community_metrics.loc[0, "top_sector"] == "TECH"
+    assert community_metrics.loc[0, "top_sector_ratio"] == 1.0
+    assert community_metrics.loc[0, "known_sector_ratio"] == 0.5
+    assert community_metrics.loc[0, "top_industry"] == "SOFT"
+    assert community_metrics.loc[0, "top_industry_ratio"] == 1.0
+    assert community_metrics.loc[0, "known_industry_ratio"] == 0.5
+    assert community_metrics.loc[0, "known_market_cap_ratio"] == 1.0
+    review_candidates = connection.execute(
+        "SELECT review_reason FROM read_csv_auto(?)",
+        [str(output_dir / "graph" / "layer_review_candidates.csv")],
+    ).fetchdf()
+    assert review_candidates.loc[0, "review_reason"] != "sector_concentrated"
+    metadata_coverage = connection.execute(
+        "SELECT * FROM read_csv_auto(?)",
+        [str(output_dir / "graph" / "metadata_coverage_report.csv")],
+    ).fetchdf()
+    assert metadata_coverage.loc[0, "sector_coverage_ratio"] == 0.5
+    assert metadata_coverage.loc[0, "industry_coverage_ratio"] == 0.5
+    assert metadata_coverage.loc[0, "market_cap_coverage_ratio"] == 1.0
+    symbol_master = connection.execute(
+        "SELECT symbol, exchange, country, quote_type FROM read_csv_auto(?) ORDER BY symbol",
+        [str(output_dir / "market" / "symbol_master.csv")],
+    ).fetchdf()
+    assert symbol_master.to_dict(orient="records")[0] == {
+        "symbol": "AAA",
+        "exchange": "NMS",
+        "country": "United States",
+        "quote_type": "EQUITY",
+    }
     assert connection.execute(
         "SELECT COUNT(*) FROM read_parquet(?)",
         [str(output_dir / "market" / "symbol_snapshot_features" / "*.parquet")],

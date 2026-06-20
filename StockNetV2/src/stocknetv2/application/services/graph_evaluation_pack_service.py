@@ -15,6 +15,11 @@ from typing import Any, Callable
 import duckdb
 import pandas as pd
 
+from stocknetv2.application.services.symbol_metadata_service import (
+    empty_symbol_metadata_frame,
+    read_symbol_metadata_csv,
+)
+
 
 @dataclass(frozen=True)
 class GraphEvaluationPackConfig:
@@ -120,7 +125,17 @@ def build_graph_evaluation_pack(
                 industry_code,
                 last_price,
                 rank,
-                market_cap
+                market_cap,
+                exchange,
+                country,
+                quote_type,
+                shares_outstanding,
+                enterprise_value,
+                currency,
+                security_type,
+                is_etf,
+                fetch_status,
+                fetch_error
             FROM pack_symbol_master
             """
         ).fetchdf()
@@ -330,32 +345,62 @@ def build_graph_evaluation_pack(
                    AND n.symbol = m.symbol
                 GROUP BY 1
             ),
+            member_metadata_coverage AS (
+                SELECT
+                    m.layer_community_id,
+                    SUM(
+                        CASE
+                            WHEN sm.sector_code IS NOT NULL AND UPPER(TRIM(sm.sector_code)) <> 'UNKNOWN' THEN 1
+                            ELSE 0
+                        END
+                    ) AS known_sector_member_count,
+                    SUM(
+                        CASE
+                            WHEN sm.industry_code IS NOT NULL AND UPPER(TRIM(sm.industry_code)) <> 'UNKNOWN' THEN 1
+                            ELSE 0
+                        END
+                    ) AS known_industry_member_count,
+                    SUM(
+                        CASE
+                            WHEN sm.market_cap IS NOT NULL AND sm.market_cap > 0 THEN 1
+                            ELSE 0
+                        END
+                    ) AS known_market_cap_member_count
+                FROM pack_memberships m
+                LEFT JOIN pack_symbol_master sm
+                    ON sm.symbol = m.symbol
+                GROUP BY 1
+            ),
             sector_rank AS (
                 SELECT
                     m.layer_community_id,
-                    COALESCE(sm.sector_code, 'UNKNOWN') AS sector_code,
+                    sm.sector_code AS sector_code,
                     COUNT(*) AS sector_member_count,
                     ROW_NUMBER() OVER (
                         PARTITION BY m.layer_community_id
-                        ORDER BY COUNT(*) DESC, COALESCE(sm.sector_code, 'UNKNOWN')
+                        ORDER BY COUNT(*) DESC, sm.sector_code
                     ) AS sector_rank
                 FROM pack_memberships m
                 LEFT JOIN pack_symbol_master sm
                     ON sm.symbol = m.symbol
+                WHERE sm.sector_code IS NOT NULL
+                  AND UPPER(TRIM(sm.sector_code)) <> 'UNKNOWN'
                 GROUP BY 1, 2
             ),
             industry_rank AS (
                 SELECT
                     m.layer_community_id,
-                    COALESCE(sm.industry_code, 'UNKNOWN') AS industry_code,
+                    sm.industry_code AS industry_code,
                     COUNT(*) AS industry_member_count,
                     ROW_NUMBER() OVER (
                         PARTITION BY m.layer_community_id
-                        ORDER BY COUNT(*) DESC, COALESCE(sm.industry_code, 'UNKNOWN')
+                        ORDER BY COUNT(*) DESC, sm.industry_code
                     ) AS industry_rank
                 FROM pack_memberships m
                 LEFT JOIN pack_symbol_master sm
                     ON sm.symbol = m.symbol
+                WHERE sm.industry_code IS NOT NULL
+                  AND UPPER(TRIM(sm.industry_code)) <> 'UNKNOWN'
                 GROUP BY 1, 2
             )
             SELECT
@@ -386,16 +431,31 @@ def build_graph_evaluation_pack(
                 COALESCE(d.community_weighted_degree, 0) AS community_weighted_degree,
                 COALESCE(mc.avg_market_cap, 0) AS avg_market_cap,
                 COALESCE(mc.market_cap_p50, 0) AS market_cap_p50,
+                COALESCE(mm.known_sector_member_count, 0) AS known_sector_member_count,
+                CASE
+                    WHEN c.member_count = 0 THEN 0
+                    ELSE COALESCE(mm.known_sector_member_count, 0) * 1.0 / c.member_count
+                END AS known_sector_ratio,
                 COALESCE(sr.sector_code, 'UNKNOWN') AS top_sector,
                 CASE
-                    WHEN c.member_count = 0 THEN 0
-                    ELSE COALESCE(sr.sector_member_count, 0) * 1.0 / c.member_count
+                    WHEN COALESCE(mm.known_sector_member_count, 0) = 0 THEN 0
+                    ELSE COALESCE(sr.sector_member_count, 0) * 1.0 / mm.known_sector_member_count
                 END AS top_sector_ratio,
-                COALESCE(ir.industry_code, 'UNKNOWN') AS top_industry,
+                COALESCE(mm.known_industry_member_count, 0) AS known_industry_member_count,
                 CASE
                     WHEN c.member_count = 0 THEN 0
-                    ELSE COALESCE(ir.industry_member_count, 0) * 1.0 / c.member_count
+                    ELSE COALESCE(mm.known_industry_member_count, 0) * 1.0 / c.member_count
+                END AS known_industry_ratio,
+                COALESCE(ir.industry_code, 'UNKNOWN') AS top_industry,
+                CASE
+                    WHEN COALESCE(mm.known_industry_member_count, 0) = 0 THEN 0
+                    ELSE COALESCE(ir.industry_member_count, 0) * 1.0 / mm.known_industry_member_count
                 END AS top_industry_ratio,
+                COALESCE(mm.known_market_cap_member_count, 0) AS known_market_cap_member_count,
+                CASE
+                    WHEN c.member_count = 0 THEN 0
+                    ELSE COALESCE(mm.known_market_cap_member_count, 0) * 1.0 / c.member_count
+                END AS known_market_cap_ratio,
                 ROW_NUMBER() OVER (
                     PARTITION BY c.snapshot_id, c.graph_layer
                     ORDER BY c.member_count DESC, COALESCE(c.avg_weight, 0) DESC, c.layer_community_id
@@ -414,6 +474,8 @@ def build_graph_evaluation_pack(
                 ON mc.layer_community_id = c.layer_community_id
             LEFT JOIN member_degree d
                 ON d.layer_community_id = c.layer_community_id
+            LEFT JOIN member_metadata_coverage mm
+                ON mm.layer_community_id = c.layer_community_id
             LEFT JOIN sector_rank sr
                 ON sr.layer_community_id = c.layer_community_id
                AND sr.sector_rank = 1
@@ -447,7 +509,10 @@ def build_graph_evaluation_pack(
                 sm.company_name,
                 sm.sector_code,
                 sm.industry_code,
-                sm.market_cap
+                sm.market_cap,
+                sm.exchange,
+                sm.country,
+                sm.quote_type
             FROM pack_memberships m
             JOIN pack_snapshot_context ctx
                 ON ctx.snapshot_id = m.snapshot_id
@@ -457,6 +522,36 @@ def build_graph_evaluation_pack(
                 ON sm.symbol = m.symbol
             """,
             artifact_paths["community_membership"],
+        )
+        artifact_paths["metadata_coverage_report"] = graph_output_dir / "metadata_coverage_report.csv"
+        _copy_query_to_csv(
+            connection,
+            """
+            WITH membership_metadata AS (
+                SELECT
+                    m.symbol,
+                    sm.sector_code,
+                    sm.industry_code,
+                    sm.market_cap,
+                    sm.exchange,
+                    sm.country,
+                    sm.quote_type
+                FROM pack_memberships m
+                LEFT JOIN pack_symbol_master sm
+                    ON sm.symbol = m.symbol
+            )
+            SELECT
+                COUNT(*) AS membership_rows,
+                COUNT(DISTINCT symbol) AS active_symbol_count,
+                AVG(CASE WHEN sector_code IS NOT NULL AND UPPER(TRIM(sector_code)) <> 'UNKNOWN' THEN 1.0 ELSE 0.0 END) AS sector_coverage_ratio,
+                AVG(CASE WHEN industry_code IS NOT NULL AND UPPER(TRIM(industry_code)) <> 'UNKNOWN' THEN 1.0 ELSE 0.0 END) AS industry_coverage_ratio,
+                AVG(CASE WHEN market_cap IS NOT NULL AND market_cap > 0 THEN 1.0 ELSE 0.0 END) AS market_cap_coverage_ratio,
+                AVG(CASE WHEN exchange IS NOT NULL AND TRIM(exchange) <> '' THEN 1.0 ELSE 0.0 END) AS exchange_coverage_ratio,
+                AVG(CASE WHEN country IS NOT NULL AND TRIM(country) <> '' THEN 1.0 ELSE 0.0 END) AS country_coverage_ratio,
+                AVG(CASE WHEN quote_type IS NOT NULL AND TRIM(quote_type) <> '' THEN 1.0 ELSE 0.0 END) AS quote_type_coverage_ratio
+            FROM membership_metadata
+            """,
+            artifact_paths["metadata_coverage_report"],
         )
         artifact_paths["layer_review_candidates"] = graph_output_dir / "layer_review_candidates.csv"
         _copy_query_to_csv(
@@ -480,8 +575,10 @@ def build_graph_evaluation_pack(
                 avg_weight,
                 layer_member_ratio,
                 avg_member_degree,
+                known_sector_ratio,
                 top_sector,
                 top_sector_ratio,
+                known_industry_ratio,
                 top_industry,
                 top_industry_ratio,
                 is_market_mode_community,
@@ -497,7 +594,7 @@ def build_graph_evaluation_pack(
                 CASE
                     WHEN is_market_mode_community THEN 'market_mode'
                     WHEN member_count >= 50 THEN 'large_cluster'
-                    WHEN top_sector_ratio >= 0.60 THEN 'sector_concentrated'
+                    WHEN known_sector_ratio >= 0.80 AND top_sector_ratio >= 0.60 THEN 'sector_concentrated'
                     ELSE 'balanced_cluster'
                 END AS review_reason
             FROM community_metrics
@@ -947,37 +1044,18 @@ def _create_pack_views(
     )
 
     if metadata_csv_path is None:
-        connection.execute(
-            """
-            CREATE OR REPLACE TEMP TABLE pack_symbol_master (
-                symbol VARCHAR,
-                source_symbol VARCHAR,
-                company_name VARCHAR,
-                sector_code VARCHAR,
-                industry_code VARCHAR,
-                last_price DOUBLE,
-                rank INTEGER,
-                market_cap DOUBLE
-            )
-            """
-        )
+        symbol_master_frame = empty_symbol_metadata_frame()
     else:
-        connection.execute(
-            f"""
-            CREATE OR REPLACE TEMP VIEW pack_symbol_master AS
-            SELECT DISTINCT
-                UPPER(TRIM("Ticker")) AS symbol,
-                TRIM("Ticker") AS source_symbol,
-                TRIM(COALESCE("Name", '')) AS company_name,
-                NULLIF(TRIM(COALESCE("SectorCode", '')), '') AS sector_code,
-                NULLIF(TRIM(COALESCE("IndCode", '')), '') AS industry_code,
-                TRY_CAST("Last" AS DOUBLE) AS last_price,
-                TRY_CAST("Rank" AS INTEGER) AS rank,
-                TRY_CAST("MktCap" AS DOUBLE) AS market_cap
-            FROM read_csv_auto('{_escape_sql_literal(str(metadata_csv_path))}', HEADER=TRUE)
-            WHERE NULLIF(TRIM(COALESCE("Ticker", '')), '') IS NOT NULL
-            """
-        )
+        symbol_master_frame = read_symbol_metadata_csv(metadata_csv_path)
+    connection.register("pack_symbol_master_frame", symbol_master_frame)
+    connection.execute(
+        """
+        CREATE OR REPLACE TEMP VIEW pack_symbol_master AS
+        SELECT *
+        FROM pack_symbol_master_frame
+        WHERE symbol IS NOT NULL
+        """
+    )
 
     connection.execute(
         f"""
