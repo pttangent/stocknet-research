@@ -126,6 +126,11 @@ class ThemeDiscoveryOrchestrator:
                 last_data_version = inputs.data_version
                 lineage_records.extend(self._build_lineage_records(inputs))
                 session_open = self._snapshot_clock.session_open_timestamp(trade_date)
+                completed_snapshot_ids = self._audit_repository.list_completed_snapshot_ids(
+                    run_id=config.run_id,
+                    trade_date=trade_date,
+                    expected_layer_count=6,
+                )
 
                 for snapshot_time in self._snapshot_clock.iter_trade_date(trade_date):
                     snapshot_id = f"{config.run_id}_{trade_date}_{snapshot_time.strftime('%H%M')}"
@@ -142,6 +147,8 @@ class ThemeDiscoveryOrchestrator:
                             "available_minutes_since_open": available_minutes,
                         }
                     )
+                    if snapshot_id in completed_snapshot_ids:
+                        continue
                     if self._layer_execution_service and self._graph_write_repository:
                         layer_result = self._layer_execution_service.execute_for_snapshot(
                             inputs=inputs,

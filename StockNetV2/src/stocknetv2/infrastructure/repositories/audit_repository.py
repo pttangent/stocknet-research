@@ -47,7 +47,7 @@ class AuditRepository:
     ) -> None:
         self._connection.execute(
             """
-            INSERT INTO theme_discovery_run (
+            INSERT OR REPLACE INTO theme_discovery_run (
                 run_id, run_name, date_start, date_end, frame_minutes,
                 config_id, config_json, code_commit, data_version, status
             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
@@ -65,6 +65,25 @@ class AuditRepository:
                 "running",
             ],
         )
+
+    def list_completed_snapshot_ids(
+        self,
+        *,
+        run_id: str,
+        trade_date: str,
+        expected_layer_count: int,
+    ) -> set[str]:
+        rows = self._connection.execute(
+            """
+            SELECT snapshot_id
+            FROM graph_layer_diagnostic
+            WHERE run_id = ? AND trade_date = ?
+            GROUP BY snapshot_id
+            HAVING COUNT(DISTINCT graph_layer) >= ?
+            """,
+            [run_id, trade_date, expected_layer_count],
+        ).fetchall()
+        return {str(row[0]) for row in rows}
 
     def add_input_lineage(self, *, run_id: str, snapshot_id: str | None, records: list[dict[str, Any]]) -> None:
         for record in records:
@@ -92,7 +111,7 @@ class AuditRepository:
         for row in snapshot_rows:
             self._connection.execute(
                 """
-                INSERT INTO graph_snapshot (
+                INSERT OR REPLACE INTO graph_snapshot (
                     snapshot_id, run_id, trade_date, timestamp, frame_minutes,
                     market_session, graph_status, available_minutes_since_open
                 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
