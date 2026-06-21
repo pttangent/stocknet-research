@@ -1110,3 +1110,11 @@ def test_git_output_preserves_leading_spaces(monkeypatch):
     output = graph_pack_service._git_output(Path("D:/DEV/stocknetwork/StockNet"), ["status"])
 
     assert output == " M data/example.parquet"
+
+
+def test_graph_evaluation_pack_service_is_split_into_small_modules():
+    service_path = Path(graph_pack_service.__file__).resolve()
+    service_lines = service_path.read_text(encoding="utf-8").splitlines()
+
+    assert len(service_lines) <= 250
+    assert (service_path.parent / "graph_evaluation_pack").is_dir()
