@@ -5,7 +5,6 @@ import json
 import math
 import os
 import platform
-import re
 import shutil
 import subprocess
 import sys
@@ -645,11 +644,47 @@ def build_graph_evaluation_pack(
             artifact_paths["community_membership"],
         )
         artifact_paths["community_member_symbols"] = graph_output_dir / "community_member_symbols.csv"
-        artifact_paths["community_member_symbol_shards"] = graph_output_dir / "community_member_symbols"
-        _export_community_member_symbol_shards(
-            connection=connection,
-            index_path=artifact_paths["community_member_symbols"],
-            output_dir=artifact_paths["community_member_symbol_shards"],
+        _copy_query_to_csv(
+            connection,
+            """
+            SELECT
+                m.layer_community_id,
+                m.run_id,
+                m.snapshot_id,
+                m.trade_date,
+                ctx.snapshot_timestamp,
+                ctx.snapshot_clock_code,
+                ctx.available_minutes_since_open,
+                m.graph_layer,
+                m.community_local_id,
+                MAX(c.member_count) AS member_count,
+                string_agg(
+                    m.symbol,
+                    ',' ORDER BY COALESCE(m.member_rank, 999999), m.symbol
+                ) AS member_symbols
+            FROM pack_memberships m
+            JOIN pack_snapshot_context ctx
+                ON ctx.snapshot_id = m.snapshot_id
+            LEFT JOIN pack_communities c
+                ON c.layer_community_id = m.layer_community_id
+            GROUP BY
+                m.layer_community_id,
+                m.run_id,
+                m.snapshot_id,
+                m.trade_date,
+                ctx.snapshot_timestamp,
+                ctx.snapshot_clock_code,
+                ctx.available_minutes_since_open,
+                m.graph_layer,
+                m.community_local_id
+            ORDER BY
+                m.trade_date,
+                ctx.snapshot_clock_code,
+                m.graph_layer,
+                member_count DESC,
+                m.layer_community_id
+            """,
+            artifact_paths["community_member_symbols"],
         )
         artifact_paths["metadata_coverage_report"] = graph_output_dir / "metadata_coverage_report.csv"
         _copy_query_to_csv(
@@ -1243,7 +1278,7 @@ def _write_readme(
         "It does not depend on rerunning the full T1 theme pipeline; instead it reconstructs evaluation context from the monthly graph-build database plus the market database.\n\n"
         "## Start Here\n\n"
         "1. Open `graph/layer_review_candidates.csv`.\n"
-        "2. Use `graph/community_member_symbols.csv` as the shard index, then open the smaller CSV files under `graph/community_member_symbols/` for the actual member-symbol rosters. Use `graph/community_metrics.parquet` and `graph/community_membership.parquet` to inspect whether large communities are real themes, sector baskets, or market-mode clusters.\n"
+        "2. Use `graph/community_member_symbols.csv` for a fast CSV roster of each community, then `graph/community_metrics.parquet` and `graph/community_membership.parquet` to inspect whether large communities are real themes, sector baskets, or market-mode clusters.\n"
         "3. Use `market/symbol_snapshot_features/` to inspect the causality-safe state of each member at the snapshot.\n"
         f"4. Use `market/symbol_forward_labels/` to check whether members outperformed `{primary_benchmark}` over the next 1m/5m/15m/30m windows.\n"
         "5. Use `market/community_snapshot_features.parquet`, `market/community_forward_labels.parquet`, `market/alpha_sanity_report.csv`, and `market/alpha_feature_ranking_by_layer.csv` for the first community-level alpha sanity pass.\n"
@@ -1262,8 +1297,7 @@ def _write_readme(
         "- `graph/node_layer_metrics/`: per-symbol, per-layer node metrics, sharded by trade date as parquet.\n"
         "- `graph/community_metrics.parquet`: community-level structure and concentration metrics.\n"
         "- `graph/community_membership.parquet`: member roster for each community.\n"
-        "- `graph/community_member_symbols.csv`: shard index for community symbol rosters, with one row per `trade_date x graph_layer` shard.\n"
-        "- `graph/community_member_symbols/`: smaller CSV shards containing ordered member-symbol lists for each community.\n"
+        "- `graph/community_member_symbols.csv`: one CSV row per community with the ordered member-symbol list for quick theme review.\n"
         "- `graph/layer_review_candidates.csv`: ranked shortlist for manual review.\n"
         "- `market/symbol_snapshot_features/`: snapshot-aligned symbol state features and actual graph inputs, sharded by trade date as parquet.\n"
         "- `market/symbol_forward_labels/`: causality-safe forward returns and benchmark-relative labels, sharded by trade date as parquet.\n"
@@ -2822,105 +2856,6 @@ def _copy_query_to_csv(
     connection.execute(
         f"COPY ({query}) TO '{_escape_sql_literal(str(output_path))}' (HEADER, DELIMITER ',')"
     )
-
-
-def _export_community_member_symbol_shards(
-    *,
-    connection: duckdb.DuckDBPyConnection,
-    index_path: Path,
-    output_dir: Path,
-) -> None:
-    output_dir.mkdir(parents=True, exist_ok=True)
-    shard_frame = connection.execute(
-        """
-        SELECT
-            CAST(m.trade_date AS VARCHAR) AS trade_date,
-            m.graph_layer,
-            COUNT(DISTINCT m.layer_community_id) AS community_count,
-            MIN(c.member_count) AS min_member_count,
-            AVG(c.member_count) AS avg_member_count,
-            MAX(c.member_count) AS max_member_count
-        FROM pack_memberships m
-        LEFT JOIN pack_communities c
-            ON c.layer_community_id = m.layer_community_id
-        GROUP BY 1, 2
-        ORDER BY 1, 2
-        """
-    ).fetchdf()
-    if shard_frame.empty:
-        pd.DataFrame(
-            columns=[
-                "trade_date",
-                "graph_layer",
-                "community_count",
-                "min_member_count",
-                "avg_member_count",
-                "max_member_count",
-                "shard_file",
-            ]
-        ).to_csv(index_path, index=False)
-        return
-
-    shard_rows: list[dict[str, Any]] = []
-    for row in shard_frame.itertuples(index=False):
-        trade_date = str(row.trade_date)
-        graph_layer = str(row.graph_layer)
-        safe_layer = re.sub(r"[^A-Za-z0-9._-]+", "_", graph_layer).strip("_") or "unknown_layer"
-        shard_file = f"{trade_date}__{safe_layer}.csv"
-        shard_path = output_dir / shard_file
-        shard_query = f"""
-            SELECT
-                m.layer_community_id,
-                m.run_id,
-                m.snapshot_id,
-                m.trade_date,
-                ctx.snapshot_timestamp,
-                ctx.snapshot_clock_code,
-                ctx.available_minutes_since_open,
-                m.graph_layer,
-                m.community_local_id,
-                MAX(c.member_count) AS member_count,
-                string_agg(
-                    m.symbol,
-                    ',' ORDER BY COALESCE(m.member_rank, 999999), m.symbol
-                ) AS member_symbols
-            FROM pack_memberships m
-            JOIN pack_snapshot_context ctx
-                ON ctx.snapshot_id = m.snapshot_id
-            LEFT JOIN pack_communities c
-                ON c.layer_community_id = m.layer_community_id
-            WHERE m.trade_date = DATE '{_escape_sql_literal(trade_date)}'
-              AND m.graph_layer = '{_escape_sql_literal(graph_layer)}'
-            GROUP BY
-                m.layer_community_id,
-                m.run_id,
-                m.snapshot_id,
-                m.trade_date,
-                ctx.snapshot_timestamp,
-                ctx.snapshot_clock_code,
-                ctx.available_minutes_since_open,
-                m.graph_layer,
-                m.community_local_id
-            ORDER BY
-                m.trade_date,
-                ctx.snapshot_clock_code,
-                m.graph_layer,
-                member_count DESC,
-                m.layer_community_id
-        """
-        _copy_query_to_csv(connection, shard_query, shard_path)
-        shard_rows.append(
-            {
-                "trade_date": trade_date,
-                "graph_layer": graph_layer,
-                "community_count": int(row.community_count or 0),
-                "min_member_count": int(row.min_member_count or 0),
-                "avg_member_count": float(row.avg_member_count or 0.0),
-                "max_member_count": int(row.max_member_count or 0),
-                "shard_file": f"community_member_symbols/{shard_file}",
-            }
-        )
-    pd.DataFrame(shard_rows).to_csv(index_path, index=False)
 
 
 def _scalar_int(connection: duckdb.DuckDBPyConnection, query: str) -> int:

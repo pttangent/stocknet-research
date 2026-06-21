@@ -509,7 +509,6 @@ def test_build_graph_evaluation_pack_exports_review_artifacts(tmp_path):
         output_dir / "graph" / "community_metrics.parquet",
         output_dir / "graph" / "community_membership.parquet",
         output_dir / "graph" / "community_member_symbols.csv",
-        output_dir / "graph" / "community_member_symbols",
         output_dir / "graph" / "layer_review_candidates.csv",
         output_dir / "graph" / "metadata_coverage_report.csv",
         output_dir / "market" / "symbol_snapshot_features",
@@ -561,21 +560,6 @@ def test_build_graph_evaluation_pack_exports_review_artifacts(tmp_path):
         [str(output_dir / "graph" / "community_membership.parquet")],
     ).fetchdf()
     assert community_membership.loc[0, "member_core_score"] > community_membership.loc[1, "member_core_score"]
-    community_symbol_index = connection.execute(
-        """
-        SELECT
-            graph_layer,
-            community_count,
-            shard_file
-        FROM read_csv_auto(?)
-        """,
-        [str(output_dir / "graph" / "community_member_symbols.csv")],
-    ).fetchdf()
-    assert len(community_symbol_index) == 1
-    assert community_symbol_index.loc[0, "graph_layer"] == "return_corr_graph"
-    assert community_symbol_index.loc[0, "community_count"] == 1
-    shard_path = output_dir / "graph" / str(community_symbol_index.loc[0, "shard_file"])
-    assert shard_path.exists()
     community_symbol_lists = connection.execute(
         """
         SELECT
@@ -584,7 +568,7 @@ def test_build_graph_evaluation_pack_exports_review_artifacts(tmp_path):
             member_symbols
         FROM read_csv_auto(?)
         """,
-        [str(shard_path)],
+        [str(output_dir / "graph" / "community_member_symbols.csv")],
     ).fetchdf()
     assert len(community_symbol_lists) == 1
     assert community_symbol_lists.loc[0, "graph_layer"] == "return_corr_graph"
@@ -734,8 +718,6 @@ def test_build_graph_evaluation_pack_exports_review_artifacts(tmp_path):
     assert {"score", "confidence_bucket", "research_action", "layer_role"}.issubset(alpha_ranking.columns)
     metadata_policy = json.loads((output_dir / "market" / "metadata_trust_policy.json").read_text(encoding="utf-8"))
     assert "safe_model_features" in metadata_policy
-    assert "graph/community_member_symbols/" in readme_text
-    assert manifest["artifacts"]["community_member_symbol_shards"]["size_bytes"] > 0
     connection.close()
 
 
