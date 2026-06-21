@@ -43,8 +43,18 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--config-version", required=True)
     parser.add_argument("--code-commit", required=True)
     parser.add_argument("--symbol-limit", type=int)
-    parser.add_argument("--max-date-workers", type=int, default=4)
-    parser.add_argument("--layer-workers-per-process", type=int, default=4)
+    parser.add_argument(
+        "--max-date-workers",
+        type=int,
+        default=24,
+        help="Per-trade-date worker count. Default: 24 to saturate a 24-core class CPU with day-level multiprocessing.",
+    )
+    parser.add_argument(
+        "--layer-workers-per-process",
+        type=int,
+        default=1,
+        help="Per-day inner layer worker count. Default: 1 to avoid oversubscribing CPU when date-level multiprocessing is already high.",
+    )
     parser.add_argument("--keep-shards", action="store_true")
     parser.add_argument("--continue-on-error", action="store_true")
     parser.add_argument("--benchmark-symbols", default="SPY,QQQ,IWM,DIA")

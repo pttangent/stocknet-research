@@ -44,8 +44,8 @@ class QualificationRunConfig:
     config_id: str = "three-month-qualification"
     config_name: str = "Three-month qualification run"
     symbol_limit: int | None = None
-    max_date_workers: int = 4
-    layer_workers_per_process: int = 4
+    max_date_workers: int = 24
+    layer_workers_per_process: int = 1
     keep_shards: bool = False
     continue_on_error: bool = False
     benchmark_symbols: tuple[str, ...] = ("SPY", "QQQ", "IWM", "DIA")

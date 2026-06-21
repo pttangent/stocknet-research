@@ -110,6 +110,21 @@ function buildProgressSnapshot() {
   };
 }
 
+function resolveExistingWatchPath(targetPath) {
+  if (!targetPath) {
+    return null;
+  }
+  let currentPath = fs.existsSync(targetPath) ? targetPath : path.dirname(targetPath);
+  while (currentPath && !fs.existsSync(currentPath)) {
+    const parentPath = path.dirname(currentPath);
+    if (!parentPath || parentPath === currentPath) {
+      return null;
+    }
+    currentPath = parentPath;
+  }
+  return currentPath && fs.existsSync(currentPath) ? currentPath : null;
+}
+
 function getProgressPageHtml() {
   return `<!doctype html>
 <html lang="en">
@@ -366,11 +381,12 @@ function openProgressStream(req, res) {
     res.write(`data: ${JSON.stringify(buildProgressSnapshot())}\n\n`);
   };
   emit();
-  const watchTargets = [getProgressFilePath(), getLogFilePath()].filter(Boolean);
-  const watchers = watchTargets.map((target) => {
-    const watchPath = fs.existsSync(target) ? target : path.dirname(target);
-    return fs.watch(watchPath, () => emit());
-  });
+  const watchTargets = [...new Set(
+    [getProgressFilePath(), getLogFilePath()]
+      .map((target) => resolveExistingWatchPath(target))
+      .filter(Boolean),
+  )];
+  const watchers = watchTargets.map((target) => fs.watch(target, () => emit()));
   const keepAlive = setInterval(() => {
     res.write(": keep-alive\n\n");
   }, 15000);

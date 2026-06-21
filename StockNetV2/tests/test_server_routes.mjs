@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
+import http from "node:http";
 import os from "node:os";
 import path from "node:path";
 import { DuckDBInstance } from "@duckdb/node-api";
@@ -231,6 +232,37 @@ test("server exposes progress api and progress page", async () => {
     assert.match(pageHtml, /StockNetV2 Qualification Progress/);
     assert.match(pageHtml, /EventSource\("\/api\/progress\/stream"\)/);
   });
+  delete process.env.STOCKNETV2_PROGRESS_FILE;
+  delete process.env.STOCKNETV2_LOG_FILE;
+});
+
+test("server keeps progress stream alive when progress files are not created yet", async () => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "stocknetv2-progress-empty-"));
+  const databasePath = path.join(tempDir, "stocknetv2.duckdb");
+  await seedDatabase(databasePath);
+
+  process.env.STOCKNETV2_PROGRESS_FILE = path.join(tempDir, "nested", "progress.json");
+  process.env.STOCKNETV2_LOG_FILE = path.join(tempDir, "nested", "run.log");
+
+  await withServer(databasePath, async (baseUrl) => {
+    await new Promise((resolve, reject) => {
+      const req = http.get(`${baseUrl}/api/progress/stream`, (res) => {
+        assert.equal(res.statusCode, 200);
+        let buffer = "";
+        res.setEncoding("utf8");
+        res.on("data", (chunk) => {
+          buffer += chunk;
+          if (buffer.includes("data:")) {
+            req.destroy();
+            resolve();
+          }
+        });
+        res.on("error", reject);
+      });
+      req.on("error", reject);
+    });
+  });
+
   delete process.env.STOCKNETV2_PROGRESS_FILE;
   delete process.env.STOCKNETV2_LOG_FILE;
 });
