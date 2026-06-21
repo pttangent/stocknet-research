@@ -921,6 +921,11 @@ def build_graph_evaluation_pack(
             primary_benchmark,
             market_data_root,
         )
+        artifact_paths["benchmark_label_source_summary"] = market_output_dir / "benchmark_label_source_summary.csv"
+        _export_benchmark_label_source_summary(
+            artifact_paths["symbol_forward_labels"],
+            artifact_paths["benchmark_label_source_summary"],
+        )
         artifact_paths["community_snapshot_features"] = market_output_dir / "community_snapshot_features.parquet"
         _export_community_snapshot_features(
             artifact_paths["community_membership"],
@@ -1281,7 +1286,7 @@ def _write_readme(
         "2. Use `graph/community_member_symbols.csv` for a fast CSV roster of each community, then `graph/community_metrics.parquet` and `graph/community_membership.parquet` to inspect whether large communities are real themes, sector baskets, or market-mode clusters.\n"
         "3. Use `market/symbol_snapshot_features/` to inspect the causality-safe state of each member at the snapshot.\n"
         f"4. Use `market/symbol_forward_labels/` to check whether members outperformed `{primary_benchmark}` over the next 1m/5m/15m/30m windows.\n"
-        "5. Use `market/community_snapshot_features.parquet`, `market/community_forward_labels.parquet`, `market/alpha_sanity_report.csv`, and `market/alpha_feature_ranking_by_layer.csv` for the first community-level alpha sanity pass.\n"
+        "5. Use `market/community_snapshot_features.parquet`, `market/community_forward_labels.parquet`, `market/alpha_sanity_report.csv`, `market/alpha_feature_ranking_by_layer.csv`, and `market/benchmark_label_source_summary.csv` for the first community-level alpha sanity pass.\n"
         "6. Use `graph/snapshot_layer_diagnostics.csv` to find pathological layers, giant clusters, or snapshots where one layer dominates the universe.\n\n"
         "## Time Notes\n\n"
         "- `snapshot_clock_code` is the canonical market-clock label from the snapshot id suffix.\n"
@@ -1305,6 +1310,7 @@ def _write_readme(
         "- `market/community_forward_labels.parquet`: community-level forward labels kept physically separate from features.\n"
         "- `market/alpha_sanity_report.csv`: first-pass RankIC / decile / hit-rate summary for community-level evaluation.\n"
         "- `market/alpha_feature_ranking_by_layer.csv`: per-layer factor ranking with sample-size-aware confidence buckets and research actions.\n"
+        "- `market/benchmark_label_source_summary.csv`: benchmark label provenance coverage for `labels_1m` vs `trade_flow_1m` proxy fallback.\n"
         "- `market/metadata_trust_policy.json`: allowed post-hoc validation use vs modeling restrictions for metadata fields.\n"
         "- `market/symbol_master.csv`: symbol metadata used for joins.\n"
         "- `market/benchmark_series/`: benchmark bar series for context, sharded by trade date as parquet.\n"
@@ -1761,6 +1767,34 @@ def _export_benchmark_series_shards(
             frame = frame.sort_values(["symbol", "timestamp"])
             frame["ret_5m"] = frame.groupby("symbol")["close"].pct_change(1)
         _write_parquet_dataframe(frame, output_dir / f"{trade_date}.parquet")
+
+
+def _export_benchmark_label_source_summary(
+    symbol_forward_label_dir: Path,
+    output_path: Path,
+) -> None:
+    connection = duckdb.connect()
+    try:
+        query = f"""
+        SELECT
+            CAST(trade_date AS VARCHAR) AS trade_date,
+            COALESCE(CAST(benchmark_label_source AS VARCHAR), 'missing') AS benchmark_label_source,
+            COALESCE(CAST(benchmark_proxy_price_method AS VARCHAR), '') AS benchmark_proxy_price_method,
+            COUNT(*) AS row_count,
+            COUNT(DISTINCT symbol) AS symbol_count,
+            AVG(
+                CASE
+                    WHEN excess_future_ret_1m IS NOT NULL THEN 1.0
+                    ELSE 0.0
+                END
+            ) AS excess_ret_1m_coverage_ratio
+        FROM read_parquet('{_escape_sql_literal(str(symbol_forward_label_dir / "*.parquet"))}')
+        GROUP BY 1, 2, 3
+        ORDER BY 1, 2, 3
+        """
+        _copy_query_to_csv(connection, query, output_path)
+    finally:
+        connection.close()
 
 
 def _build_benchmark_label_frame(

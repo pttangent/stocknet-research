@@ -517,6 +517,7 @@ def test_build_graph_evaluation_pack_exports_review_artifacts(tmp_path):
         output_dir / "market" / "community_forward_labels.parquet",
         output_dir / "market" / "alpha_sanity_report.csv",
         output_dir / "market" / "alpha_feature_ranking_by_layer.csv",
+        output_dir / "market" / "benchmark_label_source_summary.csv",
         output_dir / "market" / "metadata_trust_policy.json",
         output_dir / "market" / "symbol_master.csv",
         output_dir / "market" / "benchmark_series",
@@ -716,6 +717,13 @@ def test_build_graph_evaluation_pack_exports_review_artifacts(tmp_path):
     ).fetchdf()
     assert len(alpha_ranking) == len(alpha_report)
     assert {"score", "confidence_bucket", "research_action", "layer_role"}.issubset(alpha_ranking.columns)
+    benchmark_label_source_summary = connection.execute(
+        "SELECT * FROM read_csv_auto(?)",
+        [str(output_dir / "market" / "benchmark_label_source_summary.csv")],
+    ).fetchdf()
+    assert len(benchmark_label_source_summary) > 0
+    assert "benchmark_label_source" in benchmark_label_source_summary.columns
+    assert benchmark_label_source_summary.loc[0, "row_count"] >= 1
     metadata_policy = json.loads((output_dir / "market" / "metadata_trust_policy.json").read_text(encoding="utf-8"))
     assert "safe_model_features" in metadata_policy
     connection.close()

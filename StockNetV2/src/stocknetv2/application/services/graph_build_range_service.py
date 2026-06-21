@@ -97,7 +97,12 @@ class GraphBuildRangeService:
         self._shard_runner = shard_runner or _run_graph_build_shard
         self._executor_factory = executor_factory or _build_graph_range_executor
 
-    def run(self, config: GraphBuildRangeConfig) -> GraphBuildRangeSummary:
+    def run(
+        self,
+        config: GraphBuildRangeConfig,
+        *,
+        progress_callback: Callable[[dict[str, object]], None] | None = None,
+    ) -> GraphBuildRangeSummary:
         started_at = time.perf_counter()
         trade_dates = [
             trade_date
@@ -126,6 +131,16 @@ class GraphBuildRangeService:
             )
             for trade_date in trade_dates
         ]
+        if progress_callback is not None:
+            progress_callback(
+                {
+                    "status": "range_started",
+                    "date_start": config.date_start,
+                    "date_end": config.date_end,
+                    "total_dates": len(tasks),
+                    "max_workers": self._max_workers,
+                }
+            )
 
         shard_results: list[GraphBuildShardResult] = []
         failures: list[GraphBuildShardFailure] = []
@@ -134,16 +149,40 @@ class GraphBuildRangeService:
             if self._max_workers <= 1 or len(tasks) <= 1:
                 for task in tasks:
                     try:
-                        shard_results.append(self._shard_runner(task))
-                    except Exception as exc:
-                        failures.append(
-                            GraphBuildShardFailure(
-                                trade_date=task.trade_date,
-                                run_id=task.run_id,
-                                error_type=type(exc).__name__,
-                                error_message=str(exc),
+                        result = self._shard_runner(task)
+                        shard_results.append(result)
+                        if progress_callback is not None:
+                            progress_callback(
+                                {
+                                    "status": "shard_completed",
+                                    "trade_date": result.trade_date,
+                                    "run_id": result.run_id,
+                                    "snapshot_count": result.snapshot_count,
+                                    "elapsed_seconds": result.elapsed_seconds,
+                                    "completed_dates": len(shard_results),
+                                    "total_dates": len(tasks),
+                                }
                             )
+                    except Exception as exc:
+                        failure = GraphBuildShardFailure(
+                            trade_date=task.trade_date,
+                            run_id=task.run_id,
+                            error_type=type(exc).__name__,
+                            error_message=str(exc),
                         )
+                        failures.append(failure)
+                        if progress_callback is not None:
+                            progress_callback(
+                                {
+                                    "status": "shard_failed",
+                                    "trade_date": failure.trade_date,
+                                    "run_id": failure.run_id,
+                                    "error_type": failure.error_type,
+                                    "error_message": failure.error_message,
+                                    "completed_dates": len(shard_results),
+                                    "total_dates": len(tasks),
+                                }
+                            )
                         if not config.continue_on_error:
                             raise
             else:
@@ -154,16 +193,40 @@ class GraphBuildRangeService:
                 }
                 for future, task in futures.items():
                     try:
-                        shard_results.append(future.result())
-                    except Exception as exc:
-                        failures.append(
-                            GraphBuildShardFailure(
-                                trade_date=task.trade_date,
-                                run_id=task.run_id,
-                                error_type=type(exc).__name__,
-                                error_message=str(exc),
+                        result = future.result()
+                        shard_results.append(result)
+                        if progress_callback is not None:
+                            progress_callback(
+                                {
+                                    "status": "shard_completed",
+                                    "trade_date": result.trade_date,
+                                    "run_id": result.run_id,
+                                    "snapshot_count": result.snapshot_count,
+                                    "elapsed_seconds": result.elapsed_seconds,
+                                    "completed_dates": len(shard_results),
+                                    "total_dates": len(tasks),
+                                }
                             )
+                    except Exception as exc:
+                        failure = GraphBuildShardFailure(
+                            trade_date=task.trade_date,
+                            run_id=task.run_id,
+                            error_type=type(exc).__name__,
+                            error_message=str(exc),
                         )
+                        failures.append(failure)
+                        if progress_callback is not None:
+                            progress_callback(
+                                {
+                                    "status": "shard_failed",
+                                    "trade_date": failure.trade_date,
+                                    "run_id": failure.run_id,
+                                    "error_type": failure.error_type,
+                                    "error_message": failure.error_message,
+                                    "completed_dates": len(shard_results),
+                                    "total_dates": len(tasks),
+                                }
+                            )
                         if not config.continue_on_error:
                             raise
                 if hasattr(executor, "shutdown"):
@@ -172,13 +235,23 @@ class GraphBuildRangeService:
             if shard_results:
                 _merge_shard_databases(output_database_path, [result.database_path for result in shard_results])
 
-            return GraphBuildRangeSummary(
+            summary = GraphBuildRangeSummary(
                 processed_dates=[result.trade_date for result in shard_results],
                 shard_results=sorted(shard_results, key=lambda result: result.trade_date),
                 failures=sorted(failures, key=lambda failure: failure.trade_date),
                 failure_count=len(failures),
                 elapsed_seconds=round(time.perf_counter() - started_at, 2),
             )
+            if progress_callback is not None:
+                progress_callback(
+                    {
+                        "status": "range_completed",
+                        "processed_dates": list(summary.processed_dates),
+                        "failure_count": summary.failure_count,
+                        "elapsed_seconds": summary.elapsed_seconds,
+                    }
+                )
+            return summary
         finally:
             if should_cleanup_shards and shard_directory.exists():
                 shutil.rmtree(shard_directory, ignore_errors=True)

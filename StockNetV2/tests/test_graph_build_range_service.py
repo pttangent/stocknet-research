@@ -263,3 +263,54 @@ def test_graph_build_range_service_returns_failure_records_when_shards_fail(tmp_
             error_message="boom:2025-01-03",
         ),
     ]
+
+
+def test_graph_build_range_service_emits_progress_events_for_completed_shards(tmp_path):
+    events: list[dict[str, object]] = []
+
+    def worker(task):
+        _create_shard_database(
+            task.database_path,
+            run_id=task.run_id,
+            trade_date=task.trade_date,
+            config_id=task.config_id,
+        )
+        return GraphBuildShardResult(
+            trade_date=task.trade_date,
+            run_id=task.run_id,
+            database_path=task.database_path,
+            snapshot_count=1,
+            data_version=f"bars_5m:{task.trade_date}",
+            elapsed_seconds=0.1,
+        )
+
+    service = GraphBuildRangeService(
+        market_calendar=_StubMarketCalendar(),
+        shard_runner=worker,
+        max_workers=1,
+    )
+    config = GraphBuildRangeConfig(
+        data_root=tmp_path,
+        output_database_path=tmp_path / "month.duckdb",
+        date_start="2025-01-02",
+        date_end="2025-01-03",
+        run_prefix="graph-build",
+        config_id="graph-build-config",
+        config_name="Graph build config",
+        config_version="v1",
+        code_commit="abc123",
+        shard_directory=tmp_path / "shards",
+        keep_shards=True,
+    )
+
+    service.run(config, progress_callback=events.append)
+
+    assert [event["status"] for event in events] == [
+        "range_started",
+        "shard_completed",
+        "shard_completed",
+        "range_completed",
+    ]
+    assert events[1]["trade_date"] == "2025-01-02"
+    assert events[2]["trade_date"] == "2025-01-03"
+    assert events[3]["processed_dates"] == ["2025-01-02", "2025-01-03"]

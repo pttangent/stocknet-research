@@ -189,3 +189,48 @@ test("server exposes read-only T1 run and snapshot routes", async () => {
     assert.equal(themePayload.lifecycle.event_type, "birth");
   });
 });
+
+test("server exposes progress api and progress page", async () => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "stocknetv2-progress-"));
+  const databasePath = path.join(tempDir, "stocknetv2.duckdb");
+  const progressPath = path.join(tempDir, "progress.json");
+  const logPath = path.join(tempDir, "run.log");
+  await seedDatabase(databasePath);
+  fs.writeFileSync(
+    progressPath,
+    JSON.stringify(
+      {
+        status: "running",
+        run_label: "2025 Q1 qualification",
+        total_windows: 3,
+        completed_windows: 1,
+        total_trade_dates: 62,
+        completed_trade_dates: 20,
+        current_window_id: "2025-02",
+        current_stage: "graph_build",
+      },
+      null,
+      2,
+    ),
+  );
+  fs.writeFileSync(logPath, "window 2025-01 completed\nwindow 2025-02 started\n");
+
+  process.env.STOCKNETV2_PROGRESS_FILE = progressPath;
+  process.env.STOCKNETV2_LOG_FILE = logPath;
+  await withServer(databasePath, async (baseUrl) => {
+    const progressRes = await fetch(`${baseUrl}/api/progress`);
+    assert.equal(progressRes.status, 200);
+    const progressPayload = await progressRes.json();
+    assert.equal(progressPayload.progress.status, "running");
+    assert.equal(progressPayload.progress.completed_windows, 1);
+    assert.match(progressPayload.logs.join("\n"), /window 2025-02 started/);
+
+    const pageRes = await fetch(`${baseUrl}/progress`);
+    assert.equal(pageRes.status, 200);
+    const pageHtml = await pageRes.text();
+    assert.match(pageHtml, /StockNetV2 Qualification Progress/);
+    assert.match(pageHtml, /EventSource\("\/api\/progress\/stream"\)/);
+  });
+  delete process.env.STOCKNETV2_PROGRESS_FILE;
+  delete process.env.STOCKNETV2_LOG_FILE;
+});
