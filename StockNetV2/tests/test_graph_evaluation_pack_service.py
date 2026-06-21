@@ -546,6 +546,19 @@ def test_build_graph_evaluation_pack_exports_review_artifacts(tmp_path):
         "SELECT COUNT(*) FROM read_parquet(?)",
         [str(output_dir / "graph" / "community_membership.parquet")],
     ).fetchone()[0] == 2
+    community_membership = connection.execute(
+        """
+        SELECT
+            symbol,
+            member_rank,
+            member_weight,
+            member_core_score
+        FROM read_parquet(?)
+        ORDER BY symbol
+        """,
+        [str(output_dir / "graph" / "community_membership.parquet")],
+    ).fetchdf()
+    assert community_membership.loc[0, "member_core_score"] > community_membership.loc[1, "member_core_score"]
     community_metrics = connection.execute(
         """
         SELECT
@@ -660,6 +673,9 @@ def test_build_graph_evaluation_pack_exports_review_artifacts(tmp_path):
     assert round(community_forward_labels.loc[0, "community_member_weight_excess_future_ret_1m"], 6) == round(((0.0024 * 0.9) + (0.0014 * 0.8)) / (0.9 + 0.8), 6)
     assert round(community_forward_labels.loc[0, "community_top5_member_excess_future_ret_1m"], 6) == round((0.0024 + 0.0014) / 2, 6)
     assert round(community_forward_labels.loc[0, "community_top10_member_excess_future_ret_1m"], 6) == round((0.0024 + 0.0014) / 2, 6)
+    expected_core_weighted_excess_1m = ((0.0024 * 1.0) + (0.0014 * 0.9)) / (1.0 + 0.9)
+    assert round(community_forward_labels.loc[0, "community_core_weighted_excess_future_ret_1m"], 6) == round(expected_core_weighted_excess_1m, 6)
+    assert community_forward_labels.loc[0, "community_core_weighted_excess_future_ret_1m"] > community_forward_labels.loc[0, "community_equal_weight_excess_future_ret_1m"]
 
     alpha_report = connection.execute(
         "SELECT * FROM read_csv_auto(?)",
@@ -669,17 +685,16 @@ def test_build_graph_evaluation_pack_exports_review_artifacts(tmp_path):
     assert {
         "community_member_count",
         "edge_density_feature",
-        "feature_coverage_ratio",
-        "community_mean_bar_ret_5m_past",
-        "community_mean_bar_ret_15m_past",
-        "positive_large_trade_breadth",
+        "community_quality_score",
     }.issubset(set(alpha_report["factor_name"]))
     assert {
         "equal_weight",
         "member_weight",
         "top5_member",
         "top10_member",
+        "core_weighted",
     }.issubset(set(alpha_report["label_variant"]))
+    assert "flow_member_count_z" not in set(alpha_report["factor_name"])
     alpha_ranking = connection.execute(
         "SELECT * FROM read_csv_auto(?)",
         [str(output_dir / "market" / "alpha_feature_ranking_by_layer.csv")],
@@ -839,6 +854,29 @@ def test_export_alpha_feature_ranking_report_scores_confidence_and_actions(tmp_p
     large_trade_row = ranking.loc[ranking["graph_layer"] == "large_trade_alignment_graph"].iloc[0]
     assert large_trade_row["confidence_bucket"] == "ignore"
     assert large_trade_row["research_action"] == "ignore_sparse"
+
+
+def test_alpha_factors_are_layer_aware():
+    assert graph_pack_service._alpha_factors_for_layer("volume_expansion_graph") == [
+        "edge_density_feature",
+        "community_avg_weight_feature",
+        "feature_coverage_ratio",
+        "community_quality_score",
+        "community_mean_volume_z_12",
+    ]
+    assert graph_pack_service._alpha_factors_for_layer("flow_alignment_graph") == [
+        "community_member_count",
+        "flow_member_count_z",
+        "flow_layer_participation_ratio",
+        "flow_breadth_expansion",
+        "community_mean_flow_impulse_score",
+        "community_quality_score",
+    ]
+    assert graph_pack_service._alpha_factors_for_layer("return_corr_graph") == [
+        "community_member_count",
+        "edge_density_feature",
+        "community_quality_score",
+    ]
 
 
 def test_resolve_generator_metadata_tolerates_output_dir_outside_repo(tmp_path, monkeypatch):

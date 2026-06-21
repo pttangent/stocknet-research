@@ -23,24 +23,50 @@ from stocknetv2.application.services.symbol_metadata_service import (
 
 
 _BENCHMARK_PROXY_PRICE_METHOD = "dollar_volume_over_volume"
-_ALPHA_FACTOR_COLUMNS = [
-    "community_mean_volume_z_12",
-    "community_mean_flow_impulse_score",
-    "positive_ret_1m_breadth",
-    "positive_flow_breadth",
-    "community_avg_weight_feature",
-    "community_member_count",
-    "edge_density_feature",
-    "feature_coverage_ratio",
-    "community_mean_bar_ret_5m_past",
-    "community_mean_bar_ret_15m_past",
-    "positive_large_trade_breadth",
-]
+_ALPHA_FACTOR_COLUMNS_BY_LAYER = {
+    "volume_expansion_graph": [
+        "edge_density_feature",
+        "community_avg_weight_feature",
+        "feature_coverage_ratio",
+        "community_quality_score",
+        "community_mean_volume_z_12",
+    ],
+    "flow_alignment_graph": [
+        "community_member_count",
+        "flow_member_count_z",
+        "flow_layer_participation_ratio",
+        "flow_breadth_expansion",
+        "community_mean_flow_impulse_score",
+        "community_quality_score",
+    ],
+    "dtw_trade_flow_similarity_graph": [
+        "community_mean_volume_z_12",
+        "community_avg_weight_feature",
+        "edge_density_feature",
+        "community_quality_score",
+    ],
+    "dtw_return_similarity_graph": [
+        "edge_density_feature",
+        "community_avg_weight_feature",
+        "community_quality_score",
+    ],
+    "return_corr_graph": [
+        "community_member_count",
+        "edge_density_feature",
+        "community_quality_score",
+    ],
+    "large_trade_alignment_graph": [
+        "community_avg_weight_feature",
+        "positive_large_trade_breadth",
+        "community_quality_score",
+    ],
+}
 _ALPHA_LABEL_VARIANTS = [
     ("equal_weight", "community_equal_weight_excess_future_ret"),
     ("member_weight", "community_member_weight_excess_future_ret"),
     ("top5_member", "community_top5_member_excess_future_ret"),
     ("top10_member", "community_top10_member_excess_future_ret"),
+    ("core_weighted", "community_core_weighted_excess_future_ret"),
 ]
 _LAYER_RESEARCH_ROLES = {
     "volume_expansion_graph": "theme_candidate_layer",
@@ -520,23 +546,84 @@ def build_graph_evaluation_pack(
         _copy_query_to_parquet(
             connection,
             """
+            WITH member_metrics AS (
+                SELECT
+                    m.layer_community_id,
+                    m.run_id,
+                    m.snapshot_id,
+                    m.trade_date,
+                    m.graph_layer,
+                    m.community_local_id,
+                    m.symbol,
+                    m.member_rank,
+                    m.member_weight,
+                    COALESCE(n.weighted_degree, 0.0) AS weighted_degree,
+                    COALESCE(n.avg_incident_weight, 0.0) AS avg_incident_weight,
+                    COALESCE(n.support_points_avg, 0.0) AS support_points_avg,
+                    COALESCE(n.edge_confidence_avg, 0.0) AS edge_confidence_avg
+                FROM pack_memberships m
+                LEFT JOIN pack_node_metrics_base n
+                    ON n.snapshot_id = m.snapshot_id
+                   AND n.graph_layer = m.graph_layer
+                   AND n.symbol = m.symbol
+            ),
+            community_metric_max AS (
+                SELECT
+                    layer_community_id,
+                    MAX(weighted_degree) AS max_weighted_degree,
+                    MAX(avg_incident_weight) AS max_avg_incident_weight,
+                    MAX(support_points_avg) AS max_support_points_avg,
+                    MAX(edge_confidence_avg) AS max_edge_confidence_avg
+                FROM member_metrics
+                GROUP BY 1
+            )
             SELECT
-                m.layer_community_id,
-                m.run_id,
-                m.snapshot_id,
-                m.trade_date,
+                mm.layer_community_id,
+                mm.run_id,
+                mm.snapshot_id,
+                mm.trade_date,
                 ctx.snapshot_timestamp,
                 ctx.snapshot_clock_code,
                 ctx.available_minutes_since_open,
-                m.graph_layer,
-                m.community_local_id,
-                m.symbol,
-                m.member_rank,
-                m.member_weight,
+                mm.graph_layer,
+                mm.community_local_id,
+                mm.symbol,
+                mm.member_rank,
+                mm.member_weight,
                 c.member_count AS community_member_count,
                 c.edge_count AS community_edge_count,
                 c.edge_density,
                 c.avg_weight AS community_avg_weight,
+                mm.weighted_degree,
+                mm.avg_incident_weight,
+                mm.support_points_avg,
+                mm.edge_confidence_avg,
+                CASE
+                    WHEN COALESCE(c.member_count, 0) <= 0 THEN 0.0
+                    ELSE (COALESCE(c.member_count, 0) - COALESCE(mm.member_rank, 0) + 1) * 1.0 / c.member_count
+                END AS member_rank_score,
+                (
+                    CASE
+                        WHEN COALESCE(c.member_count, 0) <= 0 THEN 0.0
+                        ELSE (COALESCE(c.member_count, 0) - COALESCE(mm.member_rank, 0) + 1) * 1.0 / c.member_count
+                    END
+                    + CASE
+                        WHEN COALESCE(cm.max_weighted_degree, 0) <= 0 THEN 0.0
+                        ELSE mm.weighted_degree / cm.max_weighted_degree
+                    END
+                    + CASE
+                        WHEN COALESCE(cm.max_avg_incident_weight, 0) <= 0 THEN 0.0
+                        ELSE mm.avg_incident_weight / cm.max_avg_incident_weight
+                    END
+                    + CASE
+                        WHEN COALESCE(cm.max_support_points_avg, 0) <= 0 THEN 0.0
+                        ELSE mm.support_points_avg / cm.max_support_points_avg
+                    END
+                    + CASE
+                        WHEN COALESCE(cm.max_edge_confidence_avg, 0) <= 0 THEN 0.0
+                        ELSE mm.edge_confidence_avg / cm.max_edge_confidence_avg
+                    END
+                ) / 5.0 AS member_core_score,
                 sm.company_name,
                 sm.sector_code,
                 sm.industry_code,
@@ -544,13 +631,15 @@ def build_graph_evaluation_pack(
                 sm.exchange,
                 sm.country,
                 sm.quote_type
-            FROM pack_memberships m
+            FROM member_metrics mm
             JOIN pack_snapshot_context ctx
-                ON ctx.snapshot_id = m.snapshot_id
+                ON ctx.snapshot_id = mm.snapshot_id
             LEFT JOIN pack_communities c
-                ON c.layer_community_id = m.layer_community_id
+                ON c.layer_community_id = mm.layer_community_id
+            LEFT JOIN community_metric_max cm
+                ON cm.layer_community_id = mm.layer_community_id
             LEFT JOIN pack_symbol_master sm
-                ON sm.symbol = m.symbol
+                ON sm.symbol = mm.symbol
             """,
             artifact_paths["community_membership"],
         )
@@ -1833,19 +1922,34 @@ def _export_community_snapshot_features(
             LEFT JOIN read_parquet('{_escape_sql_literal(str(symbol_snapshot_feature_dir / "*.parquet"))}') sf
                 ON sf.snapshot_id = m.snapshot_id
                AND sf.symbol = m.symbol
+        ),
+        layer_active_counts AS (
+            SELECT
+                snapshot_id,
+                graph_layer,
+                COUNT(DISTINCT symbol) AS layer_active_node_count
+            FROM member_features
+            GROUP BY 1, 2
+        ),
+        snapshot_active_counts AS (
+            SELECT
+                snapshot_id,
+                COUNT(DISTINCT symbol) AS snapshot_active_symbol_count
+            FROM member_features
+            GROUP BY 1
         )
         SELECT
-            trade_date,
-            snapshot_id,
-            snapshot_timestamp,
-            snapshot_clock_code,
-            graph_layer,
-            layer_community_id,
-            community_local_id,
-            MAX(community_member_count) AS community_member_count,
-            MAX(community_edge_count) AS community_edge_count,
-            MAX(edge_density) AS edge_density,
-            MAX(community_avg_weight) AS community_avg_weight,
+            mf.trade_date,
+            mf.snapshot_id,
+            mf.snapshot_timestamp,
+            mf.snapshot_clock_code,
+            mf.graph_layer,
+            mf.layer_community_id,
+            mf.community_local_id,
+            MAX(mf.community_member_count) AS community_member_count,
+            MAX(mf.community_edge_count) AS community_edge_count,
+            MAX(mf.edge_density) AS edge_density,
+            MAX(mf.community_avg_weight) AS community_avg_weight,
             COUNT(*) AS membership_rows,
             AVG(CASE WHEN ret_1m IS NOT NULL THEN 1.0 ELSE 0.0 END) AS feature_coverage_ratio,
             AVG(ret_1m) AS community_mean_ret_1m,
@@ -1861,13 +1965,21 @@ def _export_community_snapshot_features(
             AVG(CASE WHEN market_cap IS NOT NULL AND market_cap > 0 THEN 1.0 ELSE 0.0 END) AS market_cap_coverage_ratio,
             AVG(CASE WHEN sector_code IS NOT NULL AND UPPER(TRIM(sector_code)) <> 'UNKNOWN' THEN 1.0 ELSE 0.0 END) AS sector_coverage_ratio,
             AVG(CASE WHEN industry_code IS NOT NULL AND UPPER(TRIM(industry_code)) <> 'UNKNOWN' THEN 1.0 ELSE 0.0 END) AS industry_coverage_ratio,
+            MAX(lac.layer_active_node_count) AS layer_active_node_count,
+            MAX(sac.snapshot_active_symbol_count) AS snapshot_active_symbol_count,
             MIN(graph_input_feature_timestamp) AS earliest_graph_input_feature_timestamp,
             MAX(graph_input_feature_timestamp) AS latest_graph_input_feature_timestamp,
             MAX(graph_input_available_time) AS latest_graph_input_available_time
-        FROM member_features
+        FROM member_features mf
+        LEFT JOIN layer_active_counts lac
+            ON lac.snapshot_id = mf.snapshot_id
+           AND lac.graph_layer = mf.graph_layer
+        LEFT JOIN snapshot_active_counts sac
+            ON sac.snapshot_id = mf.snapshot_id
         GROUP BY 1, 2, 3, 4, 5, 6, 7
         """
-        _copy_query_to_parquet(connection, query, output_path)
+        frame = connection.execute(query).fetchdf()
+        _write_parquet_dataframe(_augment_community_snapshot_features(frame), output_path)
     finally:
         connection.close()
 
@@ -1896,6 +2008,7 @@ def _export_community_forward_labels(
                 m.symbol,
                 m.member_rank,
                 m.member_weight,
+                m.member_core_score,
                 sf.label_source_timestamp,
                 sf.label_available_time,
                 sf.future_ret_1m,
@@ -1995,6 +2108,62 @@ def _export_community_forward_labels(
                 ),
                 0
             ) AS community_member_weight_excess_future_ret_30m,
+            SUM(
+                CASE
+                    WHEN excess_future_ret_1m IS NOT NULL AND member_core_score IS NOT NULL AND member_core_score > 0 THEN excess_future_ret_1m * member_core_score
+                    ELSE 0
+                END
+            ) / NULLIF(
+                SUM(
+                    CASE
+                        WHEN excess_future_ret_1m IS NOT NULL AND member_core_score IS NOT NULL AND member_core_score > 0 THEN member_core_score
+                        ELSE 0
+                    END
+                ),
+                0
+            ) AS community_core_weighted_excess_future_ret_1m,
+            SUM(
+                CASE
+                    WHEN excess_future_ret_5m IS NOT NULL AND member_core_score IS NOT NULL AND member_core_score > 0 THEN excess_future_ret_5m * member_core_score
+                    ELSE 0
+                END
+            ) / NULLIF(
+                SUM(
+                    CASE
+                        WHEN excess_future_ret_5m IS NOT NULL AND member_core_score IS NOT NULL AND member_core_score > 0 THEN member_core_score
+                        ELSE 0
+                    END
+                ),
+                0
+            ) AS community_core_weighted_excess_future_ret_5m,
+            SUM(
+                CASE
+                    WHEN excess_future_ret_15m IS NOT NULL AND member_core_score IS NOT NULL AND member_core_score > 0 THEN excess_future_ret_15m * member_core_score
+                    ELSE 0
+                END
+            ) / NULLIF(
+                SUM(
+                    CASE
+                        WHEN excess_future_ret_15m IS NOT NULL AND member_core_score IS NOT NULL AND member_core_score > 0 THEN member_core_score
+                        ELSE 0
+                    END
+                ),
+                0
+            ) AS community_core_weighted_excess_future_ret_15m,
+            SUM(
+                CASE
+                    WHEN excess_future_ret_30m IS NOT NULL AND member_core_score IS NOT NULL AND member_core_score > 0 THEN excess_future_ret_30m * member_core_score
+                    ELSE 0
+                END
+            ) / NULLIF(
+                SUM(
+                    CASE
+                        WHEN excess_future_ret_30m IS NOT NULL AND member_core_score IS NOT NULL AND member_core_score > 0 THEN member_core_score
+                        ELSE 0
+                    END
+                ),
+                0
+            ) AS community_core_weighted_excess_future_ret_30m,
             AVG(CASE WHEN member_rank <= 5 THEN excess_future_ret_1m END) AS community_top5_member_excess_future_ret_1m,
             AVG(CASE WHEN member_rank <= 5 THEN excess_future_ret_5m END) AS community_top5_member_excess_future_ret_5m,
             AVG(CASE WHEN member_rank <= 5 THEN excess_future_ret_15m END) AS community_top5_member_excess_future_ret_15m,
@@ -2035,6 +2204,22 @@ def _export_alpha_sanity_report(
 ) -> None:
     features = pd.read_parquet(community_snapshot_feature_path)
     labels = pd.read_parquet(community_forward_label_path)
+    labels = labels.drop(
+        columns=[
+            column
+            for column in (
+                "trade_date",
+                "snapshot_timestamp",
+                "snapshot_clock_code",
+                "community_local_id",
+                "community_member_count",
+                "community_edge_count",
+                "edge_density",
+                "community_avg_weight",
+            )
+            if column in labels.columns
+        ]
+    )
     merged = features.merge(
         labels,
         how="inner",
@@ -2054,7 +2239,7 @@ def _export_alpha_sanity_report(
     ]
     rows: list[dict[str, Any]] = []
     for graph_layer, layer_frame in merged.groupby("graph_layer", dropna=False):
-        for factor_name in _ALPHA_FACTOR_COLUMNS:
+        for factor_name in _alpha_factors_for_layer(graph_layer):
             if factor_name not in layer_frame.columns:
                 continue
             for label_variant, horizon_name, target_name in target_variants:
@@ -2175,6 +2360,64 @@ def _alpha_research_action(row: pd.Series) -> str:
     if sample_size >= 3000:
         return "downgrade"
     return "watch"
+
+
+def _alpha_factors_for_layer(graph_layer: Any) -> list[str]:
+    return list(_ALPHA_FACTOR_COLUMNS_BY_LAYER.get(str(graph_layer), ["community_quality_score"]))
+
+
+def _augment_community_snapshot_features(frame: pd.DataFrame) -> pd.DataFrame:
+    if frame.empty:
+        for column in (
+            "edge_density_feature",
+            "community_avg_weight_feature",
+            "layer_member_ratio",
+            "flow_member_count_z",
+            "flow_layer_participation_ratio",
+            "flow_breadth_expansion",
+            "community_quality_score",
+        ):
+            frame[column] = pd.Series(dtype="float64")
+        return frame
+    augmented = frame.copy()
+    augmented["snapshot_timestamp"] = pd.to_datetime(augmented["snapshot_timestamp"])
+    augmented["edge_density_feature"] = pd.to_numeric(augmented["edge_density"], errors="coerce")
+    augmented["community_avg_weight_feature"] = pd.to_numeric(augmented["community_avg_weight"], errors="coerce")
+    augmented["community_member_count"] = pd.to_numeric(augmented["community_member_count"], errors="coerce")
+    augmented["feature_coverage_ratio"] = pd.to_numeric(augmented["feature_coverage_ratio"], errors="coerce")
+    augmented["layer_active_node_count"] = pd.to_numeric(augmented["layer_active_node_count"], errors="coerce")
+    augmented["snapshot_active_symbol_count"] = pd.to_numeric(augmented["snapshot_active_symbol_count"], errors="coerce")
+    augmented["layer_member_ratio"] = (
+        augmented["community_member_count"] / augmented["layer_active_node_count"].replace(0, pd.NA)
+    )
+    augmented["flow_layer_participation_ratio"] = (
+        augmented["layer_active_node_count"] / augmented["snapshot_active_symbol_count"].replace(0, pd.NA)
+    )
+    augmented["flow_member_count_z"] = (
+        augmented.groupby("graph_layer", dropna=False)["community_member_count"].transform(_safe_zscore)
+    )
+    quality_components = (
+        augmented.groupby("graph_layer", dropna=False)["edge_density_feature"].transform(_safe_zscore)
+        + augmented.groupby("graph_layer", dropna=False)["community_avg_weight_feature"].transform(_safe_zscore)
+        + augmented.groupby("graph_layer", dropna=False)["feature_coverage_ratio"].transform(_safe_zscore)
+        - augmented.groupby("graph_layer", dropna=False)["layer_member_ratio"].transform(_safe_zscore)
+    )
+    augmented["community_quality_score"] = quality_components
+    breadth_base = (
+        augmented.loc[:, ["snapshot_id", "graph_layer", "snapshot_timestamp", "flow_layer_participation_ratio"]]
+        .drop_duplicates()
+        .sort_values(["graph_layer", "snapshot_timestamp", "snapshot_id"])
+        .reset_index(drop=True)
+    )
+    breadth_base["flow_breadth_expansion"] = (
+        breadth_base.groupby("graph_layer", dropna=False)["flow_layer_participation_ratio"].diff().fillna(0.0)
+    )
+    augmented = augmented.merge(
+        breadth_base[["snapshot_id", "graph_layer", "flow_breadth_expansion"]],
+        how="left",
+        on=["snapshot_id", "graph_layer"],
+    )
+    return augmented
 
 
 def _write_metadata_trust_policy(output_path: Path) -> None:

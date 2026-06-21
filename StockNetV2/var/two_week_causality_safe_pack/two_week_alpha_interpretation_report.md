@@ -2,221 +2,185 @@
 
 Date range: `2025-01-06` to `2025-01-17`
 
-Scope: interpret the repaired two-week community alpha readout after adding factor expansion, benchmark-label provenance, core-member label variants, and `alpha_feature_ranking_by_layer.csv`, without rerunning graph construction.
+Scope: interpret the two-week causality-safe evaluation pack after adding member core scores, a `core_weighted` label variant, `community_quality_score`, flow breadth/regime factors, and layer-aware alpha factor sets.
 
 ## Executive Read
 
-This pack is now decision-grade for the next research step.
+This pack is now strong enough to answer the next three research questions directly.
 
-- `market/alpha_sanity_report.csv` now has `1056` rows.
-- `960 / 1056` rows have `sample_size > 0`.
-- `market/alpha_feature_ranking_by_layer.csv` now ranks every layer-factor-horizon-variant row with:
-  - sample-aware `score`
-  - `confidence_bucket`
-  - `research_action`
-  - fixed `layer_role`
+- `market/alpha_sanity_report.csv` now has `480` rows.
+- `460 / 480` rows have `sample_size > 0`.
+- `market/alpha_feature_ranking_by_layer.csv` now reflects:
+  - `5` label variants
+  - layer-aware factor sets
+  - core/periphery-aware labels
 
-The important upgrade is:
+The most important result is:
 
-> we can now rank features inside each layer, not just say whether a layer "looks interesting".
-
-This is still not a formal alpha validation pack. It is a repaired, causality-safe, two-week feature-ranking readout.
-
-## Fixed Layer Roles
-
-Use these names consistently going forward:
-
-- `volume_expansion_graph` -> `theme_candidate_layer`
-- `flow_alignment_graph` -> `event_alignment_layer`
-- `return_corr_graph` -> `beta_context_layer`
-- `dtw_trade_flow_similarity_graph` -> `pair_flow_leadlag_candidate`
-- `dtw_return_similarity_graph` -> `weak_pair_candidate`
-- `large_trade_alignment_graph` -> `sparse_event_flag`
+> the readout is now good enough to judge whether the next bottleneck is community construction or member weighting.
 
 ## Direct Answers
 
-### 1. What is driving the volume layer right now?
+### 1. Is `core_weighted` better than `equal_weight` or `top5_member`?
 
-The strongest volume-layer readout is **not** `community_mean_volume_z_12`.
+Not yet, at least not consistently.
 
-The highest-ranked `volume_expansion_graph` factors are:
+Across all comparable layer-factor-horizon rows:
 
-1. `edge_density_feature`
-2. `feature_coverage_ratio`
-3. `community_avg_weight_feature`
+- `core_weighted > equal_weight`: `36`
+- `core_weighted < equal_weight`: `52`
+- `core_weighted = equal_weight`: `8`
 
-So the current two-week read is:
+- `core_weighted > top5_member`: `39`
+- `core_weighted < top5_member`: `49`
+- `core_weighted = top5_member`: `8`
 
-> volume layer signal is coming more from compactness / structure quality / feature completeness than from raw volume z-score by itself.
-
-This is a good sign for theme quality research, because it suggests the layer is not simply rewarding "more volume" indiscriminately.
-
-### 2. Is the flow layer signal only concentrated in 1m / 5m?
-
-No.
-
-The current top `flow_alignment_graph` rows are dominated by:
-
-- `community_member_count`
-- `15m`
-- `30m`
-
-Short-horizon rows still appear, but the strongest ranking rows are not limited to `1m` or `5m`.
+Layer-by-layer, the only mild positive result is in `flow_alignment_graph`, where `core_weighted` beats `equal_weight` on `11 / 24` rows and beats `top5_member` on `12 / 24` rows.
 
 So the correct interpretation is:
 
-> flow is behaving like an event/regime participation layer with some persistence into 15m/30m structure, not just a one-bar micro-noise effect.
+> core weighting is now a real readout, but it is not yet clearly superior to equal-weight or top-5 slicing.
 
-### 3. Is top-k core member return stronger than equal-weight community return?
+This means the next step is still to improve the core score itself, not to declare the problem solved.
 
-Partially yes, but with an important caveat.
+### 2. Is `community_quality_score` more stable than plain `edge_density_feature`?
 
-What we can confirm from this pack:
+Partially yes, especially for the volume layer.
 
-- `top5_member` differs from equal-weight on many real communities:
-  - `flow_alignment_graph`: `23137 / 27822` rows differ
-  - `return_corr_graph`: `20282 / 24939` rows differ
-  - `volume_expansion_graph`: `6102 / 27125` rows differ
-- `top10_member` also differs materially, though less often than `top5_member`.
+For `volume_expansion_graph`:
 
-What we **cannot** confirm yet:
-
-- `member_weight` adds no information in this window.
-- In the underlying graph database, `layer_community_membership.member_weight` is currently constant:
-  - `min = 1.0`
-  - `max = 1.0`
-  - `count(distinct) = 1`
-
-So the right statement is:
-
-> core-member slicing is informative; member-weight slicing is not informative yet because the upstream membership weights are still uniform.
-
-## Benchmark Provenance
-
-This repaired pack now exposes benchmark provenance in both symbol and community labels.
-
-For this two-week window:
-
-- `benchmark_label_source = trade_flow_proxy` for all exported community rows
-- `benchmark_proxy_price_method = dollar_volume_over_volume`
-
-That means this pack is readable, but all benchmark-relative alpha numbers in this window should be interpreted as:
-
-> benchmark-relative readout using trade-flow-derived benchmark proxy labels
-
-not as direct benchmark bars/labels.
-
-## Best Feature Reads By Layer
-
-### `volume_expansion_graph` (`theme_candidate_layer`)
-
-Best current factors:
+- `community_quality_score`
+  - best score: `0.031762`
+  - positive rows: `20`
+  - usable/strong rows: `20`
 
 - `edge_density_feature`
-- `feature_coverage_ratio`
-- `community_avg_weight_feature`
+  - best score: `0.120609`
+  - positive rows: `15`
+  - usable/strong rows: `20`
 
-Research action:
+So:
 
-> keep pushing this as the primary theme-candidate layer
+- `edge_density_feature` is still the stronger peak factor
+- `community_quality_score` is the more stable factor across the full set of horizons/variants
 
-### `flow_alignment_graph` (`event_alignment_layer`)
+That is exactly the kind of behavior we wanted from a quality composite.
 
-Best current factors:
+But this is not universal across all layers:
 
+- `dtw_return_similarity_graph`: quality is mildly more stable than density
+- `dtw_trade_flow_similarity_graph`: quality is currently worse than density
+- `return_corr_graph`: both are weak, and quality is still negative
+
+So the correct statement is:
+
+> `community_quality_score` is a useful stabilizer, especially for volume, but it is not yet a universally dominant replacement for `edge_density_feature`.
+
+### 3. Does the new flow breadth factor confirm 15m / 30m effectiveness?
+
+Mixed result:
+
+- `flow_layer_participation_ratio`: yes, strong positive evidence at `15m` and `30m`
+- `flow_breadth_expansion`: no, currently negative and consistently downgraded
+
+Top positive flow breadth/regime rows are now:
+
+- `flow_layer_participation_ratio`, `15m`, `equal_weight`, score `0.235965`
+- `flow_layer_participation_ratio`, `30m`, `equal_weight`, score `0.188703`
+- `community_member_count`, `30m`, `equal_weight`, score `0.222427`
+- `flow_member_count_z`, `30m`, `equal_weight`, score `0.222427`
+
+But `flow_breadth_expansion` is negative across all horizons, including:
+
+- `15m`, `equal_weight`, score `-0.390138`
+- `30m`, `equal_weight`, score `-0.202455`
+
+So the correct interpretation is:
+
+> flow breadth regime participation is working; flow breadth acceleration is not.
+
+That means the next flow-layer focus should be on participation/regime size, not on snapshot-to-snapshot expansion.
+
+## Updated Layer Read
+
+### `volume_expansion_graph` -> `theme_candidate_layer`
+
+This is still the best theme-candidate layer.
+
+What changed:
+
+- the strongest peak factor is still `edge_density_feature`
+- `community_quality_score` now adds a more stable confirmation layer
+- the layer still deserves `prioritize_for_next_round`
+
+Current read:
+
+> volume is still the primary theme layer, and now we know its strongest signal is structure-quality-driven rather than raw volume-z-driven.
+
+### `flow_alignment_graph` -> `event_alignment_layer`
+
+This layer now reads even more clearly as a regime breadth layer.
+
+The strongest factors are:
+
+- `flow_layer_participation_ratio`
 - `community_member_count`
-- `community_mean_volume_z_12`
-- `edge_density_feature`
+- `flow_member_count_z`
 
-Research action:
+Current read:
 
-> keep this layer, but treat it as event/regime structure rather than pure theme structure
+> flow is not a pure short-horizon event spike layer; it is an event/regime participation layer with meaningful 15m/30m persistence.
 
-### `return_corr_graph` (`beta_context_layer`)
+### `return_corr_graph` -> `beta_context_layer`
 
-Best current factors:
+Still context, not a primary theme layer.
 
-- `community_member_count`
-- `community_mean_volume_z_12`
+The best read is still `community_member_count`, but the overall scores remain modest.
 
-Research action:
+### `dtw_trade_flow_similarity_graph` -> `pair_flow_leadlag_candidate`
 
-> keep as context, not as the main theme layer
+Still under watch.
 
-### `dtw_trade_flow_similarity_graph` (`pair_flow_leadlag_candidate`)
+The best read remains `community_mean_volume_z_12`, but sample size stays in the `watch` bucket rather than upgrading to `usable` or `strong_sample`.
 
-Best current factors:
+### `dtw_return_similarity_graph` -> `weak_pair_candidate`
 
-- `community_mean_volume_z_12`
-- `edge_density_feature`
-- `community_member_count`
+Still weak.
 
-Research action:
+The best rows are mostly structure-based, not clearly economically interpretable.
 
-> keep under watch; interesting, but sample size is still only `watch`, not `usable` or `strong_sample`
+### `large_trade_alignment_graph` -> `sparse_event_flag`
 
-### `dtw_return_similarity_graph` (`weak_pair_candidate`)
+Still too sparse.
 
-Best current factors:
+The headline scores remain large, but they are still `ignore_sparse`.
 
-- `edge_density_feature`
-- `community_avg_weight_feature`
+## What This Means For The Next Commit
 
-Research action:
+This run does **not** justify a second month or a full-month rerun yet.
 
-> still weak; keep in research scope, but do not prioritize
+It does justify one specific next move:
 
-### `large_trade_alignment_graph` (`sparse_event_flag`)
+> improve the core/periphery definition before expanding the validation window.
 
-This layer still prints the biggest raw scores, but every top row remains in:
+Concretely:
 
-- `confidence_bucket = ignore`
-
-Research action:
-
-> do not promote this layer based on current scores; the sample is too sparse
-
-## What The Ranking File Changed
-
-The new ranking file prevents a common failure mode:
-
-> overreacting to high RankIC from tiny samples
-
-Examples:
-
-- `large_trade_alignment_graph` still shows the biggest raw scores, but is automatically downgraded to `ignore_sparse`.
-- `volume_expansion_graph` gets `prioritize_for_next_round` only when the sample is truly strong.
-- `flow_alignment_graph` now reads as a persistent event layer, not a short-horizon curiosity.
-
-## Recommended Next Step
-
-Do not rerun graph build yet.
-
-Do not expand to one month yet.
-
-Do not move to TGNN, lifecycle, or theme naming yet.
-
-The next most useful step is:
-
-1. review `market/alpha_feature_ranking_by_layer.csv`
-2. shortlist the best factor families per layer
-3. decide whether to improve:
-   - community construction
-   - member weighting
-   - or community feature engineering
-
-in that order
+1. keep `community_quality_score`
+2. keep `flow_layer_participation_ratio`
+3. keep `community_member_count` / `flow_member_count_z`
+4. drop or demote `flow_breadth_expansion`
+5. improve `member_core_score` before expecting `core_weighted` to win consistently
 
 ## Bottom Line
 
-This repair phase succeeded.
+This round succeeded.
 
-The decision-grade takeaways are:
+The three decision answers are:
 
-- `volume_expansion_graph` remains the best theme-candidate layer, but its current edge comes more from density/coverage/weight than raw volume z-score.
-- `flow_alignment_graph` is not just a 1m/5m effect; it behaves like an event/regime layer with 15m/30m persistence.
-- `top5_member` already contains new information versus equal-weight, but `member_weight` does not, because upstream membership weights are still all `1.0`.
+1. `core_weighted` is not yet clearly better than `equal_weight` or `top5_member`
+2. `community_quality_score` is more stable than `edge_density_feature` for the volume layer, but not universally stronger
+3. flow regime participation works at `15m/30m`, while flow breadth expansion currently does not
 
-So the next research turn should focus on:
+So the next correct move is:
 
-> feature selection and community-core readout quality, not more graph reruns.
+> refine the core/periphery model and keep the validation window at two weeks before expanding scope.
