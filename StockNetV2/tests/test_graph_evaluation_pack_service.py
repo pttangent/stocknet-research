@@ -508,6 +508,7 @@ def test_build_graph_evaluation_pack_exports_review_artifacts(tmp_path):
         output_dir / "graph" / "node_layer_metrics",
         output_dir / "graph" / "community_metrics.parquet",
         output_dir / "graph" / "community_membership.parquet",
+        output_dir / "graph" / "community_member_symbols.csv",
         output_dir / "graph" / "layer_review_candidates.csv",
         output_dir / "graph" / "metadata_coverage_report.csv",
         output_dir / "market" / "symbol_snapshot_features",
@@ -559,6 +560,20 @@ def test_build_graph_evaluation_pack_exports_review_artifacts(tmp_path):
         [str(output_dir / "graph" / "community_membership.parquet")],
     ).fetchdf()
     assert community_membership.loc[0, "member_core_score"] > community_membership.loc[1, "member_core_score"]
+    community_symbol_lists = connection.execute(
+        """
+        SELECT
+            graph_layer,
+            member_count,
+            member_symbols
+        FROM read_csv_auto(?)
+        """,
+        [str(output_dir / "graph" / "community_member_symbols.csv")],
+    ).fetchdf()
+    assert len(community_symbol_lists) == 1
+    assert community_symbol_lists.loc[0, "graph_layer"] == "return_corr_graph"
+    assert community_symbol_lists.loc[0, "member_count"] == 2
+    assert community_symbol_lists.loc[0, "member_symbols"] == "AAA,BBB"
     community_metrics = connection.execute(
         """
         SELECT
