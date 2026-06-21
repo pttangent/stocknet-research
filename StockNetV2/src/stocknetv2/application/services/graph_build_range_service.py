@@ -39,6 +39,9 @@ class GraphBuildRangeConfig:
     shard_directory: Path | str | None = None
     keep_shards: bool = False
     layer_workers_per_process: int = 1
+    dtw_backend: str = "cpu_python"
+    dtw_torch_device: str = "auto"
+    dtw_torch_batch_pair_threshold: int = 1024
 
 
 @dataclass(frozen=True)
@@ -54,6 +57,9 @@ class GraphBuildShardTask:
     config_version: str
     code_commit: str
     layer_workers: int
+    dtw_backend: str
+    dtw_torch_device: str
+    dtw_torch_batch_pair_threshold: int
 
 
 @dataclass(frozen=True)
@@ -128,6 +134,9 @@ class GraphBuildRangeService:
                 config_version=config.config_version,
                 code_commit=config.code_commit,
                 layer_workers=max(1, config.layer_workers_per_process),
+                dtw_backend=config.dtw_backend,
+                dtw_torch_device=config.dtw_torch_device,
+                dtw_torch_batch_pair_threshold=max(1, config.dtw_torch_batch_pair_threshold),
             )
             for trade_date in trade_dates
         ]
@@ -294,6 +303,9 @@ def _run_graph_build_shard(task: GraphBuildShardTask) -> GraphBuildShardResult:
         config_version=task.config_version,
         code_commit=task.code_commit,
         layer_workers=task.layer_workers,
+        dtw_backend=task.dtw_backend,
+        dtw_torch_device=task.dtw_torch_device,
+        dtw_torch_batch_pair_threshold=task.dtw_torch_batch_pair_threshold,
     )
     return GraphBuildShardResult(
         trade_date=task.trade_date,

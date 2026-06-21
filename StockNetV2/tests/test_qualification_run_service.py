@@ -228,6 +228,9 @@ def test_qualification_run_service_writes_monthly_outputs_and_progress(tmp_path)
     assert progress_payload["completed_windows"] == 2
     assert progress_payload["completed_trade_dates"] == 4
     assert progress_payload["bars_5m_timestamp_semantics"] == "bar_close_time"
+    assert progress_payload["dtw_backend"] == "torch_cuda"
+    assert progress_payload["dtw_torch_device"] == "cuda"
+    assert progress_payload["dtw_torch_batch_pair_threshold"] == 1024
     assert any(
         artifact["path"].endswith("cross_month_alpha_comparison.csv")
         for artifact in progress_payload["recent_artifacts"]
@@ -252,3 +255,4 @@ def test_qualification_run_service_writes_monthly_outputs_and_progress(tmp_path)
 
     run_context = json.loads((tmp_path / "qualification_run" / "qualification_config.json").read_text(encoding="utf-8"))
     assert run_context["benchmark_symbols"] == ["SPY", "QQQ", "IWM", "DIA"]
+    assert run_context["dtw_backend"] == "torch_cuda"

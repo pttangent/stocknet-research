@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pandas as pd
 
-from stocknetv2.domain.graph.dtw_distance import dtw_similarity
+from stocknetv2.domain.graph.dtw_backend import compute_dtw_similarity_scores
 from stocknetv2.domain.graph.dtw_window import compute_effective_dtw_window
 from stocknetv2.domain.graph.edge import GraphEdge
 from stocknetv2.domain.graph.series_utils import (
@@ -24,6 +24,9 @@ def build_dtw_return_similarity_edges(
     degree_cap: int | None = None,
     min_overlap_points: int = 8,
     min_variance: float = 1e-8,
+    backend: str = "cpu_python",
+    torch_device: str = "auto",
+    torch_batch_pair_threshold: int = 1024,
 ) -> list[GraphEdge]:
     window_info = compute_effective_dtw_window(snapshot_time=snapshot_time, session_open=session_open)
     if not window_info["enabled"]:
@@ -45,7 +48,7 @@ def build_dtw_return_similarity_edges(
         min_variance=min_variance,
     )
     symbols = matrix.columns.tolist()
-    edges: list[GraphEdge] = []
+    pair_records: list[tuple[str, str, list[float], list[float], int]] = []
     for left_index, right_index in select_topk_pair_indices(
         coarse_matrix,
         min_score=-1.0,
@@ -66,7 +69,25 @@ def build_dtw_return_similarity_edges(
 
         left_values = ((aligned[left_symbol] - aligned[left_symbol].mean()) / left_std).astype(float).tolist()
         right_values = ((aligned[right_symbol] - aligned[right_symbol].mean()) / right_std).astype(float).tolist()
-        score = dtw_similarity(left_values, right_values)
+        pair_records.append((left_symbol, right_symbol, left_values, right_values, len(aligned)))
+
+    if not pair_records:
+        return []
+
+    scores, _effective_backend = compute_dtw_similarity_scores(
+        [record[2] for record in pair_records],
+        [record[3] for record in pair_records],
+        backend=backend,
+        torch_device=torch_device,
+        torch_batch_pair_threshold=torch_batch_pair_threshold,
+    )
+
+    edges: list[GraphEdge] = []
+    for (left_symbol, right_symbol, _left_values, _right_values, support_points), score in zip(
+        pair_records,
+        scores,
+        strict=True,
+    ):
         if score < min_similarity:
             continue
         edges.append(
@@ -78,7 +99,7 @@ def build_dtw_return_similarity_edges(
                 snapshot_time=snapshot_time,
                 weight=score,
                 raw_score=score,
-                support_points=len(aligned),
+                support_points=support_points,
                 edge_confidence=float(window_info["window_confidence"]),
                 effective_lookback_minutes=int(window_info["effective_lookback_minutes"]),
             )

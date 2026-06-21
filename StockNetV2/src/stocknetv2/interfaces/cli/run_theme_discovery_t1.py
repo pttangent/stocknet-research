@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import os
+from dataclasses import replace
 from pathlib import Path
 
 import duckdb
@@ -48,10 +49,26 @@ def run_theme_discovery(
     config_version: str,
     code_commit: str,
     layer_workers: int = 1,
+    dtw_backend: str = "cpu_python",
+    dtw_torch_device: str = "auto",
+    dtw_torch_batch_pair_threshold: int = 1024,
 ):
     resolved_database_path = Path(database_path).expanduser().resolve()
     resolved_database_path.parent.mkdir(parents=True, exist_ok=True)
-    discovery_settings = ThemeDiscoverySettings()
+    discovery_settings = ThemeDiscoverySettings(
+        dtw_return=replace(
+            ThemeDiscoverySettings().dtw_return,
+            backend=dtw_backend,
+            torch_device=dtw_torch_device,
+            torch_batch_pair_threshold=max(1, dtw_torch_batch_pair_threshold),
+        ),
+        dtw_trade_flow=replace(
+            ThemeDiscoverySettings().dtw_trade_flow,
+            backend=dtw_backend,
+            torch_device=dtw_torch_device,
+            torch_batch_pair_threshold=max(1, dtw_torch_batch_pair_threshold),
+        ),
+    )
 
     market_source = _build_market_source(
         legacy_data_root=legacy_data_root,
@@ -118,6 +135,24 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--config-version", required=True)
     parser.add_argument("--code-commit", required=True)
     parser.add_argument("--layer-workers", type=int, help="Process workers for per-snapshot layer builds.")
+    parser.add_argument(
+        "--dtw-backend",
+        default="cpu_python",
+        choices=("cpu_python", "torch_cpu", "torch_cuda", "torch_auto"),
+        help="DTW execution backend for dtw_return_similarity_graph and dtw_trade_flow_similarity_graph.",
+    )
+    parser.add_argument(
+        "--dtw-torch-device",
+        default="auto",
+        choices=("auto", "cpu", "cuda"),
+        help="Preferred torch device when a torch DTW backend is used.",
+    )
+    parser.add_argument(
+        "--dtw-torch-batch-pair-threshold",
+        type=int,
+        default=1024,
+        help="Minimum pair count before switching DTW work to the torch backend.",
+    )
     return parser.parse_args()
 
 
@@ -139,6 +174,9 @@ def main() -> int:
         config_version=args.config_version,
         code_commit=args.code_commit,
         layer_workers=args.layer_workers or _default_layer_workers(graph_build_only=args.graph_build_only),
+        dtw_backend=args.dtw_backend,
+        dtw_torch_device=args.dtw_torch_device,
+        dtw_torch_batch_pair_threshold=args.dtw_torch_batch_pair_threshold,
     )
     print(
         f"Completed run {summary.run_id} for {len(summary.trade_dates_processed)} trade date(s) "

@@ -50,6 +50,9 @@ class QualificationRunConfig:
     continue_on_error: bool = False
     benchmark_symbols: tuple[str, ...] = ("SPY", "QQQ", "IWM", "DIA")
     bars_5m_timestamp_semantics: str = "bar_close_time"
+    dtw_backend: str = "torch_cuda"
+    dtw_torch_device: str = "cuda"
+    dtw_torch_batch_pair_threshold: int = 1024
     git_push_enabled: bool = True
     git_remote: str = "origin"
     git_branch: str | None = None
@@ -157,6 +160,10 @@ class QualificationRunService:
             "updated_at": None,
             "bars_5m_timestamp_semantics": config.bars_5m_timestamp_semantics,
             "benchmark_symbols": list(config.benchmark_symbols),
+            "dtw_backend": config.dtw_backend,
+            "dtw_torch_device": config.dtw_torch_device,
+            "dtw_torch_batch_pair_threshold": config.dtw_torch_batch_pair_threshold,
+            "gpu_name": _detect_gpu_name() if config.dtw_backend != "cpu_python" else None,
             "windows": window_rows,
             "recent_artifacts": [],
         }
@@ -170,6 +177,10 @@ class QualificationRunService:
                     "code_commit": config.code_commit,
                     "bars_5m_timestamp_semantics": config.bars_5m_timestamp_semantics,
                     "benchmark_symbols": list(config.benchmark_symbols),
+                    "dtw_backend": config.dtw_backend,
+                    "dtw_torch_device": config.dtw_torch_device,
+                    "dtw_torch_batch_pair_threshold": config.dtw_torch_batch_pair_threshold,
+                    "gpu_name": progress_state["gpu_name"],
                     "windows": [
                         {
                             "window_id": window.window_id,
@@ -185,7 +196,10 @@ class QualificationRunService:
             ),
             encoding="utf-8",
         )
-        self._append_log(log_path, f"qualification run initialized: {config.run_label}")
+        self._append_log(
+            log_path,
+            f"qualification run initialized: {config.run_label} | dtw_backend={config.dtw_backend} | dtw_torch_device={config.dtw_torch_device} | dtw_torch_batch_pair_threshold={config.dtw_torch_batch_pair_threshold}",
+        )
         self._write_progress(progress_path, progress_state)
 
         window_results: list[QualificationWindowResult] = []
@@ -361,6 +375,9 @@ class QualificationRunService:
             continue_on_error=config.continue_on_error,
             keep_shards=config.keep_shards,
             layer_workers_per_process=max(1, config.layer_workers_per_process),
+            dtw_backend=config.dtw_backend,
+            dtw_torch_device=config.dtw_torch_device,
+            dtw_torch_batch_pair_threshold=max(1, config.dtw_torch_batch_pair_threshold),
         )
         if self._graph_range_runner is not None:
             return self._graph_range_runner(graph_config, progress_callback=progress_callback)
@@ -654,3 +671,13 @@ def _git_stdout(command: list[str]) -> str:
         text=True,
     )
     return completed.stdout
+
+
+def _detect_gpu_name() -> str | None:
+    try:
+        import torch
+    except Exception:
+        return None
+    if not torch.cuda.is_available():
+        return None
+    return str(torch.cuda.get_device_name(0))

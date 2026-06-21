@@ -209,6 +209,8 @@ test("server exposes progress api and progress page", async () => {
         completed_trade_dates: 20,
         current_window_id: "2025-02",
         current_stage: "graph_build",
+        dtw_backend: "torch_cuda",
+        gpu_name: "NVIDIA GeForce RTX 5090",
       },
       null,
       2,
@@ -231,6 +233,8 @@ test("server exposes progress api and progress page", async () => {
     const pageHtml = await pageRes.text();
     assert.match(pageHtml, /StockNetV2 Qualification Progress/);
     assert.match(pageHtml, /EventSource\("\/api\/progress\/stream"\)/);
+    assert.match(pageHtml, /DTW Backend/);
+    assert.match(pageHtml, /GPU/);
   });
   delete process.env.STOCKNETV2_PROGRESS_FILE;
   delete process.env.STOCKNETV2_LOG_FILE;

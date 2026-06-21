@@ -64,6 +64,24 @@ def parse_args() -> argparse.Namespace:
         choices=("bar_close_time", "bar_start_time"),
         help="Explicit 5m bar timestamp semantics recorded into progress/config outputs.",
     )
+    parser.add_argument(
+        "--dtw-backend",
+        default="torch_cuda",
+        choices=("cpu_python", "torch_cpu", "torch_cuda", "torch_auto"),
+        help="DTW backend for the two DTW graph layers. Default: torch_cuda.",
+    )
+    parser.add_argument(
+        "--dtw-torch-device",
+        default="cuda",
+        choices=("auto", "cpu", "cuda"),
+        help="Torch device preference when using a torch DTW backend. Default: cuda.",
+    )
+    parser.add_argument(
+        "--dtw-torch-batch-pair-threshold",
+        type=int,
+        default=1024,
+        help="Minimum DTW candidate pair count before switching to the torch backend.",
+    )
     parser.add_argument("--git-remote", default="origin")
     parser.add_argument("--git-branch")
     parser.add_argument("--skip-git-push", action="store_true")
@@ -97,6 +115,9 @@ def main() -> int:
             continue_on_error=args.continue_on_error,
             benchmark_symbols=benchmark_symbols,
             bars_5m_timestamp_semantics=args.bars_5m_timestamp_semantics,
+            dtw_backend=args.dtw_backend,
+            dtw_torch_device=args.dtw_torch_device,
+            dtw_torch_batch_pair_threshold=max(1, args.dtw_torch_batch_pair_threshold),
             git_push_enabled=not args.skip_git_push,
             git_remote=args.git_remote,
             git_branch=args.git_branch,

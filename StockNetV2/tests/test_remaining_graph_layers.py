@@ -46,6 +46,45 @@ def test_dtw_return_similarity_builds_confident_edge_after_minimum_window():
     assert edge.support_points >= 8
 
 
+def test_dtw_return_similarity_torch_cpu_matches_default_backend():
+    timestamps = _timestamp_range(20)
+    base = _shape(20)
+    features = pd.DataFrame(
+        {
+            "timestamp": timestamps * 3,
+            "symbol": ["AAA"] * 20 + ["BBB"] * 20 + ["CCC"] * 20,
+            "ret_1m": base + [value * 1.01 + 0.0001 for value in base] + list(reversed(base)),
+        }
+    )
+
+    cpu_edges = build_dtw_return_similarity_edges(
+        features_1m=features,
+        snapshot_time=pd.Timestamp("2026-01-02T14:50:00Z"),
+        session_open=pd.Timestamp("2026-01-02T14:30:00Z"),
+        min_similarity=0.9,
+        top_k_per_symbol=1,
+        min_overlap_points=8,
+        backend="cpu_python",
+    )
+    torch_edges = build_dtw_return_similarity_edges(
+        features_1m=features,
+        snapshot_time=pd.Timestamp("2026-01-02T14:50:00Z"),
+        session_open=pd.Timestamp("2026-01-02T14:30:00Z"),
+        min_similarity=0.9,
+        top_k_per_symbol=1,
+        min_overlap_points=8,
+        backend="torch_cpu",
+        torch_batch_pair_threshold=1,
+    )
+
+    assert len(cpu_edges) == len(torch_edges) == 1
+    assert {cpu_edges[0].source_symbol, cpu_edges[0].target_symbol} == {
+        torch_edges[0].source_symbol,
+        torch_edges[0].target_symbol,
+    }
+    assert abs(cpu_edges[0].weight - torch_edges[0].weight) < 1e-8
+
+
 def test_dtw_return_rejects_pairs_without_shared_timestamps():
     left_times = list(pd.date_range("2026-01-02T14:31:00Z", periods=10, freq="2min"))
     right_times = list(pd.date_range("2026-01-02T14:32:00Z", periods=10, freq="2min"))
@@ -170,6 +209,47 @@ def test_dtw_trade_flow_similarity_builds_edge_from_flow_shape():
     assert edges[0].graph_layer == "dtw_trade_flow_similarity_graph"
     assert edges[0].edge_confidence == 0.75
     assert edges[0].support_points >= 8
+
+
+def test_dtw_trade_flow_similarity_torch_cpu_matches_default_backend():
+    timestamps = _timestamp_range(20)
+    base = [float(index % 6) + 0.1 * index for index in range(20)]
+    features = pd.DataFrame(
+        {
+            "timestamp": timestamps * 2,
+            "symbol": ["AAA"] * 20 + ["BBB"] * 20,
+            "flow_impulse_score": base + [value * 1.01 for value in base],
+            "imbalance_z": [value * 0.2 for value in base] + [value * 0.202 for value in base],
+            "large_trade_ratio_z": [value * 0.1 for value in base] + [value * 0.101 for value in base],
+        }
+    )
+
+    cpu_edges = build_dtw_trade_flow_similarity_edges(
+        features_1m=features,
+        snapshot_time=pd.Timestamp("2026-01-02T14:50:00Z"),
+        session_open=pd.Timestamp("2026-01-02T14:30:00Z"),
+        min_similarity=0.9,
+        top_k_per_symbol=1,
+        min_overlap_points=8,
+        backend="cpu_python",
+    )
+    torch_edges = build_dtw_trade_flow_similarity_edges(
+        features_1m=features,
+        snapshot_time=pd.Timestamp("2026-01-02T14:50:00Z"),
+        session_open=pd.Timestamp("2026-01-02T14:30:00Z"),
+        min_similarity=0.9,
+        top_k_per_symbol=1,
+        min_overlap_points=8,
+        backend="torch_cpu",
+        torch_batch_pair_threshold=1,
+    )
+
+    assert len(cpu_edges) == len(torch_edges) == 1
+    assert {cpu_edges[0].source_symbol, cpu_edges[0].target_symbol} == {
+        torch_edges[0].source_symbol,
+        torch_edges[0].target_symbol,
+    }
+    assert abs(cpu_edges[0].weight - torch_edges[0].weight) < 1e-8
 
 
 def test_dtw_trade_flow_rejects_single_point_overlap():

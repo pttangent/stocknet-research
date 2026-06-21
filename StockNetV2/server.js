@@ -68,6 +68,10 @@ function getDefaultProgressPayload() {
     completed_trade_dates: 0,
     current_window_id: null,
     current_stage: "idle",
+    dtw_backend: "cpu_python",
+    dtw_torch_device: "auto",
+    dtw_torch_batch_pair_threshold: 1024,
+    gpu_name: null,
     updated_at: null,
     windows: [],
     recent_artifacts: [],
@@ -273,6 +277,8 @@ function getProgressPageHtml() {
           <div class="card"><div class="card-label">Current Stage</div><div id="stageValue" class="card-value">-</div></div>
           <div class="card"><div class="card-label">Trade Dates</div><div id="tradeDateValue" class="card-value">0 / 0</div></div>
           <div class="card"><div class="card-label">Windows</div><div id="windowCountValue" class="card-value">0 / 0</div></div>
+          <div class="card"><div class="card-label">DTW Backend</div><div id="dtwBackendValue" class="card-value">cpu_python</div></div>
+          <div class="card"><div class="card-label">GPU</div><div id="gpuValue" class="card-value">-</div></div>
           <div class="card"><div class="card-label">Updated</div><div id="updatedValue" class="card-value">-</div></div>
         </div>
       </section>
@@ -302,6 +308,8 @@ function getProgressPageHtml() {
       const stageValue = document.getElementById("stageValue");
       const tradeDateValue = document.getElementById("tradeDateValue");
       const windowCountValue = document.getElementById("windowCountValue");
+      const dtwBackendValue = document.getElementById("dtwBackendValue");
+      const gpuValue = document.getElementById("gpuValue");
       const updatedValue = document.getElementById("updatedValue");
       const logBox = document.getElementById("logBox");
       const jsonBox = document.getElementById("jsonBox");
@@ -324,6 +332,8 @@ function getProgressPageHtml() {
         stageValue.textContent = progress.current_stage || "-";
         tradeDateValue.textContent = completedTradeDates + " / " + totalTradeDates;
         windowCountValue.textContent = completedWindows + " / " + totalWindows;
+        dtwBackendValue.textContent = progress.dtw_backend || "cpu_python";
+        gpuValue.textContent = progress.gpu_name || "-";
         updatedValue.textContent = progress.updated_at || "-";
         logBox.textContent = logs.join("\\n");
         jsonBox.textContent = JSON.stringify(progress, null, 2);

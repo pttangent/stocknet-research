@@ -33,6 +33,9 @@ class DTWLayerConfig:
     min_similarity: float = 0.9
     min_overlap_points: int = 8
     min_variance: float = 1e-8
+    backend: str = "cpu_python"
+    torch_device: str = "auto"
+    torch_batch_pair_threshold: int = 1024
     filter: LayerFilterConfig = field(default_factory=LayerFilterConfig)
 
 
