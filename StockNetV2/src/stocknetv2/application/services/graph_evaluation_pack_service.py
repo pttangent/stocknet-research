@@ -2323,6 +2323,137 @@ def _export_alpha_feature_ranking_report(
     ranking.to_csv(output_path, index=False)
 
 
+def _export_cross_window_alpha_comparison_report(
+    first_window_ranking_path: Path,
+    second_window_ranking_path: Path,
+    output_path: Path,
+    *,
+    first_window_id: str,
+    second_window_id: str,
+) -> None:
+    key_columns = [
+        "graph_layer",
+        "layer_role",
+        "factor_name",
+        "label_horizon",
+        "label_variant",
+    ]
+    metric_columns = [
+        "sample_size",
+        "rank_ic",
+        "top_bottom_spread",
+        "top_decile_hit_rate",
+        "score",
+        "confidence_bucket",
+        "research_action",
+    ]
+    first = _prepare_cross_window_ranking_frame(first_window_ranking_path, key_columns, metric_columns, "first")
+    second = _prepare_cross_window_ranking_frame(second_window_ranking_path, key_columns, metric_columns, "second")
+    comparison = first.merge(
+        second,
+        how="outer",
+        on=key_columns,
+    )
+    if comparison.empty:
+        pd.DataFrame(
+            columns=key_columns
+            + [
+                "first_window_id",
+                "second_window_id",
+                "first_score_sign",
+                "second_score_sign",
+                "score_direction_consistent",
+                "rank_ic_direction_consistent",
+                "sample_qualified_both",
+                "research_action_consistent",
+                "score_delta",
+                "sample_size_delta",
+                "stability_bucket",
+                "research_decision",
+            ]
+        ).to_csv(output_path, index=False)
+        return
+    comparison["first_window_id"] = first_window_id
+    comparison["second_window_id"] = second_window_id
+    for prefix in ("first", "second"):
+        comparison[f"{prefix}_sample_size"] = pd.to_numeric(
+            comparison[f"{prefix}_sample_size"],
+            errors="coerce",
+        ).fillna(0).astype(int)
+        comparison[f"{prefix}_rank_ic"] = pd.to_numeric(comparison[f"{prefix}_rank_ic"], errors="coerce")
+        comparison[f"{prefix}_top_bottom_spread"] = pd.to_numeric(
+            comparison[f"{prefix}_top_bottom_spread"],
+            errors="coerce",
+        )
+        comparison[f"{prefix}_top_decile_hit_rate"] = pd.to_numeric(
+            comparison[f"{prefix}_top_decile_hit_rate"],
+            errors="coerce",
+        )
+        comparison[f"{prefix}_score"] = pd.to_numeric(comparison[f"{prefix}_score"], errors="coerce")
+        comparison[f"{prefix}_score_sign"] = comparison[f"{prefix}_score"].apply(_alpha_sign)
+    comparison["score_direction_consistent"] = comparison.apply(
+        lambda row: row["first_score_sign"] != 0
+        and row["second_score_sign"] != 0
+        and row["first_score_sign"] == row["second_score_sign"],
+        axis=1,
+    )
+    comparison["rank_ic_direction_consistent"] = comparison.apply(
+        lambda row: _alpha_sign(row["first_rank_ic"]) != 0
+        and _alpha_sign(row["second_rank_ic"]) != 0
+        and _alpha_sign(row["first_rank_ic"]) == _alpha_sign(row["second_rank_ic"]),
+        axis=1,
+    )
+    comparison["sample_qualified_both"] = comparison.apply(
+        lambda row: row["first_sample_size"] >= 3000 and row["second_sample_size"] >= 3000,
+        axis=1,
+    )
+    comparison["research_action_consistent"] = (
+        comparison["first_research_action"].fillna("") == comparison["second_research_action"].fillna("")
+    )
+    comparison["score_delta"] = comparison["second_score"] - comparison["first_score"]
+    comparison["sample_size_delta"] = comparison["second_sample_size"] - comparison["first_sample_size"]
+    comparison["stability_bucket"] = comparison.apply(_cross_window_stability_bucket, axis=1)
+    comparison["research_decision"] = comparison["stability_bucket"].map(
+        {
+            "stable_positive": "confirm_layer_role",
+            "stable_negative": "deprioritize",
+            "insufficient_sample": "needs_more_sample",
+            "missing_in_one_window": "rebuild_missing_window",
+        }
+    ).fillna("review_manually")
+    comparison = comparison.sort_values(
+        [
+            "stability_bucket",
+            "graph_layer",
+            "factor_name",
+            "label_variant",
+            "label_horizon",
+        ],
+        ascending=[True, True, True, True, True],
+    ).reset_index(drop=True)
+    comparison.to_csv(output_path, index=False)
+
+
+def _prepare_cross_window_ranking_frame(
+    ranking_path: Path,
+    key_columns: list[str],
+    metric_columns: list[str],
+    prefix: str,
+) -> pd.DataFrame:
+    frame = pd.read_csv(ranking_path)
+    available_key_columns = [column for column in key_columns if column in frame.columns]
+    available_metric_columns = [column for column in metric_columns if column in frame.columns]
+    prepared = frame.loc[:, available_key_columns + available_metric_columns].copy()
+    for column in key_columns:
+        if column not in prepared.columns:
+            prepared[column] = pd.NA
+    for column in metric_columns:
+        if column not in prepared.columns:
+            prepared[column] = pd.NA
+    rename_map = {column: f"{prefix}_{column}" for column in metric_columns}
+    return prepared.loc[:, key_columns + metric_columns].rename(columns=rename_map)
+
+
 def _alpha_ranking_score(row: pd.Series) -> float:
     rank_ic = row.get("rank_ic")
     spread = row.get("top_bottom_spread")
@@ -2360,6 +2491,30 @@ def _alpha_research_action(row: pd.Series) -> str:
     if sample_size >= 3000:
         return "downgrade"
     return "watch"
+
+
+def _alpha_sign(value: Any) -> int:
+    if pd.isna(value):
+        return 0
+    numeric_value = float(value)
+    if numeric_value > 0:
+        return 1
+    if numeric_value < 0:
+        return -1
+    return 0
+
+
+def _cross_window_stability_bucket(row: pd.Series) -> str:
+    if row["first_sample_size"] == 0 or row["second_sample_size"] == 0:
+        return "missing_in_one_window"
+    if not row["sample_qualified_both"]:
+        return "insufficient_sample"
+    if row["score_direction_consistent"]:
+        if row["first_score_sign"] > 0:
+            return "stable_positive"
+        if row["first_score_sign"] < 0:
+            return "stable_negative"
+    return "unstable_direction"
 
 
 def _alpha_factors_for_layer(graph_layer: Any) -> list[str]:

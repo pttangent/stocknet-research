@@ -856,6 +856,165 @@ def test_export_alpha_feature_ranking_report_scores_confidence_and_actions(tmp_p
     assert large_trade_row["research_action"] == "ignore_sparse"
 
 
+def test_export_cross_window_alpha_comparison_report_flags_stability_and_sample_quality(tmp_path):
+    first_window_path = tmp_path / "first_window_alpha_feature_ranking.csv"
+    second_window_path = tmp_path / "second_window_alpha_feature_ranking.csv"
+    comparison_output_path = tmp_path / "cross_window_alpha_comparison.csv"
+
+    pd.DataFrame(
+        [
+            {
+                "graph_layer": "volume_expansion_graph",
+                "layer_role": "theme_candidate_layer",
+                "factor_name": "community_quality_score",
+                "label_horizon": "30m",
+                "label_variant": "equal_weight",
+                "sample_size": 12000,
+                "rank_ic": 0.05,
+                "top_bottom_spread": 0.0020,
+                "top_decile_hit_rate": 0.61,
+                "score": 0.20,
+                "confidence_bucket": "strong_sample",
+                "research_action": "prioritize_for_next_round",
+            },
+            {
+                "graph_layer": "flow_alignment_graph",
+                "layer_role": "event_alignment_layer",
+                "factor_name": "flow_layer_participation_ratio",
+                "label_horizon": "15m",
+                "label_variant": "equal_weight",
+                "sample_size": 4200,
+                "rank_ic": 0.06,
+                "top_bottom_spread": 0.0015,
+                "top_decile_hit_rate": 0.59,
+                "score": 0.18,
+                "confidence_bucket": "usable",
+                "research_action": "keep_for_next_round",
+            },
+            {
+                "graph_layer": "return_corr_graph",
+                "layer_role": "beta_context_layer",
+                "factor_name": "edge_density_feature",
+                "label_horizon": "15m",
+                "label_variant": "equal_weight",
+                "sample_size": 16000,
+                "rank_ic": -0.03,
+                "top_bottom_spread": -0.0011,
+                "top_decile_hit_rate": 0.45,
+                "score": -0.13,
+                "confidence_bucket": "strong_sample",
+                "research_action": "downgrade",
+            },
+            {
+                "graph_layer": "large_trade_alignment_graph",
+                "layer_role": "sparse_event_flag",
+                "factor_name": "community_quality_score",
+                "label_horizon": "30m",
+                "label_variant": "equal_weight",
+                "sample_size": 220,
+                "rank_ic": 0.20,
+                "top_bottom_spread": 0.0040,
+                "top_decile_hit_rate": 0.62,
+                "score": 0.11,
+                "confidence_bucket": "ignore",
+                "research_action": "ignore_sparse",
+            },
+        ]
+    ).to_csv(first_window_path, index=False)
+
+    pd.DataFrame(
+        [
+            {
+                "graph_layer": "volume_expansion_graph",
+                "layer_role": "theme_candidate_layer",
+                "factor_name": "community_quality_score",
+                "label_horizon": "30m",
+                "label_variant": "equal_weight",
+                "sample_size": 11800,
+                "rank_ic": 0.04,
+                "top_bottom_spread": 0.0017,
+                "top_decile_hit_rate": 0.58,
+                "score": 0.16,
+                "confidence_bucket": "strong_sample",
+                "research_action": "prioritize_for_next_round",
+            },
+            {
+                "graph_layer": "flow_alignment_graph",
+                "layer_role": "event_alignment_layer",
+                "factor_name": "flow_layer_participation_ratio",
+                "label_horizon": "15m",
+                "label_variant": "equal_weight",
+                "sample_size": 4100,
+                "rank_ic": -0.02,
+                "top_bottom_spread": -0.0006,
+                "top_decile_hit_rate": 0.48,
+                "score": -0.07,
+                "confidence_bucket": "usable",
+                "research_action": "downgrade",
+            },
+            {
+                "graph_layer": "return_corr_graph",
+                "layer_role": "beta_context_layer",
+                "factor_name": "edge_density_feature",
+                "label_horizon": "15m",
+                "label_variant": "equal_weight",
+                "sample_size": 15200,
+                "rank_ic": -0.02,
+                "top_bottom_spread": -0.0008,
+                "top_decile_hit_rate": 0.46,
+                "score": -0.09,
+                "confidence_bucket": "strong_sample",
+                "research_action": "downgrade",
+            },
+            {
+                "graph_layer": "large_trade_alignment_graph",
+                "layer_role": "sparse_event_flag",
+                "factor_name": "community_quality_score",
+                "label_horizon": "30m",
+                "label_variant": "equal_weight",
+                "sample_size": 240,
+                "rank_ic": 0.12,
+                "top_bottom_spread": 0.0020,
+                "top_decile_hit_rate": 0.57,
+                "score": 0.08,
+                "confidence_bucket": "ignore",
+                "research_action": "ignore_sparse",
+            },
+        ]
+    ).to_csv(second_window_path, index=False)
+
+    graph_pack_service._export_cross_window_alpha_comparison_report(
+        first_window_path,
+        second_window_path,
+        comparison_output_path,
+        first_window_id="2025-01-06_2025-01-17",
+        second_window_id="2025-01-21_2025-01-31",
+    )
+
+    comparison = pd.read_csv(comparison_output_path)
+
+    volume_row = comparison.loc[comparison["graph_layer"] == "volume_expansion_graph"].iloc[0]
+    assert bool(volume_row["score_direction_consistent"]) is True
+    assert bool(volume_row["sample_qualified_both"]) is True
+    assert volume_row["stability_bucket"] == "stable_positive"
+    assert volume_row["research_decision"] == "confirm_layer_role"
+
+    flow_row = comparison.loc[comparison["graph_layer"] == "flow_alignment_graph"].iloc[0]
+    assert bool(flow_row["score_direction_consistent"]) is False
+    assert flow_row["stability_bucket"] == "unstable_direction"
+    assert flow_row["research_decision"] == "review_manually"
+
+    return_corr_row = comparison.loc[comparison["graph_layer"] == "return_corr_graph"].iloc[0]
+    assert bool(return_corr_row["score_direction_consistent"]) is True
+    assert return_corr_row["stability_bucket"] == "stable_negative"
+    assert return_corr_row["research_decision"] == "deprioritize"
+
+    large_trade_row = comparison.loc[comparison["graph_layer"] == "large_trade_alignment_graph"].iloc[0]
+    assert bool(large_trade_row["sample_qualified_both"]) is False
+    assert large_trade_row["stability_bucket"] == "insufficient_sample"
+    assert large_trade_row["research_decision"] == "needs_more_sample"
+
+
 def test_alpha_factors_are_layer_aware():
     assert graph_pack_service._alpha_factors_for_layer("volume_expansion_graph") == [
         "edge_density_feature",
