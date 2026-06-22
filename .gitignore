@@ -18,6 +18,7 @@ env/
 
 # Node
 node_modules/
+StockNetV2/node_modules/
 
 # Large binary data files
 *.parquet
@@ -56,6 +57,8 @@ artifacts/*.log
 artifacts/tmp_*.csv
 artifacts/*/*.log
 .runtime_publish/
+StockNetV2/.pytest_cache/
+StockNetV2/var/
 
 # Test / sample / subset outputs
 artifacts/*_test/
