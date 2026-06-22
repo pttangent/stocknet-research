@@ -6,11 +6,15 @@ import duckdb
 import pandas as pd
 
 from stocknetv2.application.services.layer_execution_service import LayerExecutionService
+from stocknetv2.application.services.layer_execution_service import LayerExecutionResult
+from stocknetv2.application.services.temporal_edge_replay_service import TemporalEdgeReplayService
 from stocknetv2.application.services.theme_discovery_orchestrator import (
     ThemeDiscoveryOrchestrator,
     ThemeDiscoveryRunConfig,
 )
 from stocknetv2.application.services.consensus_service import ConsensusService
+from stocknetv2.domain.community.community import Community
+from stocknetv2.domain.graph.edge import GraphEdge
 from stocknetv2.infrastructure.db.schema_manager import SchemaManager
 from stocknetv2.infrastructure.repositories.audit_repository import AuditRepository
 from stocknetv2.infrastructure.repositories.graph_write_repository import GraphWriteRepository
@@ -75,6 +79,64 @@ class LayeredMarketReadRepository:
         )
 
 
+class StaticLayerExecutionService:
+    def execute_for_snapshot(self, *, inputs, snapshot_time, session_open):
+        shared_members = ["AAA", "BBB", "CCC"]
+        layer_edges = {
+            "return_corr_graph": [
+                GraphEdge(
+                    graph_layer="return_corr_graph",
+                    edge_type="return_correlation",
+                    source_symbol="AAA",
+                    target_symbol="BBB",
+                    snapshot_time=snapshot_time,
+                    weight=0.81,
+                    raw_score=0.81,
+                    support_points=8,
+                )
+            ],
+            "flow_alignment_graph": [
+                GraphEdge(
+                    graph_layer="flow_alignment_graph",
+                    edge_type="flow_alignment",
+                    source_symbol="AAA",
+                    target_symbol="CCC",
+                    snapshot_time=snapshot_time,
+                    weight=0.79,
+                    raw_score=0.79,
+                    support_points=12,
+                )
+            ],
+            "volume_expansion_graph": [
+                GraphEdge(
+                    graph_layer="volume_expansion_graph",
+                    edge_type="volume_expansion",
+                    source_symbol="BBB",
+                    target_symbol="CCC",
+                    snapshot_time=snapshot_time,
+                    weight=0.77,
+                    raw_score=0.77,
+                    support_points=10,
+                )
+            ],
+            "dtw_return_similarity_graph": [],
+            "dtw_trade_flow_similarity_graph": [],
+            "large_trade_alignment_graph": [],
+        }
+        layer_communities = {
+            "return_corr_graph": [Community(members=shared_members)],
+            "flow_alignment_graph": [Community(members=shared_members)],
+            "volume_expansion_graph": [Community(members=shared_members)],
+            "dtw_return_similarity_graph": [],
+            "dtw_trade_flow_similarity_graph": [],
+            "large_trade_alignment_graph": [],
+        }
+        return LayerExecutionResult(layer_edges=layer_edges, layer_communities=layer_communities)
+
+    def close(self):
+        return None
+
+
 def test_orchestrator_persists_layer_community_and_consensus_outputs():
     connection = duckdb.connect(":memory:")
     SchemaManager(connection).initialize()
@@ -83,10 +145,11 @@ def test_orchestrator_persists_layer_community_and_consensus_outputs():
         market_repository=LayeredMarketReadRepository(),
         audit_repository=AuditRepository(connection),
         snapshot_clock=OneSnapshotClock(),
-        layer_execution_service=LayerExecutionService(),
-        graph_write_repository=GraphWriteRepository(connection),
-        consensus_service=ConsensusService(),
-        theme_write_repository=ThemeWriteRepository(connection),
+            layer_execution_service=StaticLayerExecutionService(),
+            graph_write_repository=GraphWriteRepository(connection),
+            consensus_service=ConsensusService(),
+            temporal_edge_replay_service=TemporalEdgeReplayService(),
+            theme_write_repository=ThemeWriteRepository(connection),
     )
     config = ThemeDiscoveryRunConfig(
         run_id="run_layers_test",
@@ -111,6 +174,14 @@ def test_orchestrator_persists_layer_community_and_consensus_outputs():
         ["run_layers_test"],
     ).fetchone()[0]
     community_count = connection.execute("SELECT COUNT(*) FROM layer_community WHERE run_id = ?", ["run_layers_test"]).fetchone()[0]
+    relation_observation_count = connection.execute(
+        "SELECT COUNT(*) FROM relation_observation WHERE run_id = ?",
+        ["run_layers_test"],
+    ).fetchone()[0]
+    temporal_edge_state_count = connection.execute(
+        "SELECT COUNT(*) FROM temporal_edge_state WHERE run_id = ?",
+        ["run_layers_test"],
+    ).fetchone()[0]
     membership_count = connection.execute(
         "SELECT COUNT(*) FROM layer_community_membership WHERE run_id = ?",
         ["run_layers_test"],
@@ -124,13 +195,15 @@ def test_orchestrator_persists_layer_community_and_consensus_outputs():
         ["run_layers_test"],
     ).fetchone()[0]
 
-    assert edge_count >= 6
+    assert edge_count == 3
     assert summary_count == 6
     assert diagnostic_count == 6
-    assert community_count >= 1
-    assert membership_count >= 2
+    assert community_count == 3
+    assert relation_observation_count >= edge_count
+    assert temporal_edge_state_count >= edge_count
+    assert membership_count == 9
     assert theme_count >= 1
-    assert theme_membership_count >= 2
+    assert theme_membership_count >= 3
 
 
 def test_orchestrator_can_run_graph_build_only_mode():
@@ -141,10 +214,11 @@ def test_orchestrator_can_run_graph_build_only_mode():
         market_repository=LayeredMarketReadRepository(),
         audit_repository=AuditRepository(connection),
         snapshot_clock=OneSnapshotClock(),
-        layer_execution_service=LayerExecutionService(),
-        graph_write_repository=GraphWriteRepository(connection),
-        consensus_service=ConsensusService(),
-        theme_write_repository=ThemeWriteRepository(connection),
+            layer_execution_service=StaticLayerExecutionService(),
+            graph_write_repository=GraphWriteRepository(connection),
+            consensus_service=ConsensusService(),
+            temporal_edge_replay_service=TemporalEdgeReplayService(),
+            theme_write_repository=ThemeWriteRepository(connection),
     )
     config = ThemeDiscoveryRunConfig(
         run_id="run_graph_only_test",
@@ -165,11 +239,19 @@ def test_orchestrator_can_run_graph_build_only_mode():
     assert connection.execute(
         "SELECT COUNT(*) FROM graph_edges_thresholded WHERE run_id = ?",
         ["run_graph_only_test"],
-    ).fetchone()[0] >= 6
+    ).fetchone()[0] == 3
     assert connection.execute(
         "SELECT COUNT(*) FROM layer_community WHERE run_id = ?",
         ["run_graph_only_test"],
-    ).fetchone()[0] >= 1
+    ).fetchone()[0] == 3
+    assert connection.execute(
+        "SELECT COUNT(*) FROM relation_observation WHERE run_id = ?",
+        ["run_graph_only_test"],
+    ).fetchone()[0] == 3
+    assert connection.execute(
+        "SELECT COUNT(*) FROM temporal_edge_state WHERE run_id = ?",
+        ["run_graph_only_test"],
+    ).fetchone()[0] == 3
     assert connection.execute(
         "SELECT COUNT(*) FROM consensus_theme_candidate WHERE run_id = ?",
         ["run_graph_only_test"],

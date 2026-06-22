@@ -41,7 +41,7 @@ def test_dtw_return_similarity_builds_confident_edge_after_minimum_window():
     edge = edges[0]
     assert edge.graph_layer == "dtw_return_similarity_graph"
     assert {edge.source_symbol, edge.target_symbol} == {"AAA", "BBB"}
-    assert edge.edge_confidence == 0.75
+    assert edge.edge_confidence == 0.8
     assert edge.effective_lookback_minutes == 20
     assert edge.support_points >= 8
 
@@ -183,6 +183,46 @@ def test_flow_alignment_graph_aligns_on_shared_timestamps_when_series_lengths_di
     assert {edges[0].source_symbol, edges[0].target_symbol} == {"AAA", "BBB"}
 
 
+def test_flow_alignment_torch_cpu_matches_numpy_backend():
+    timestamps = _timestamp_range(6)
+    features = pd.DataFrame(
+        {
+            "timestamp": timestamps * 3,
+            "symbol": ["AAA"] * 6 + ["BBB"] * 6 + ["CCC"] * 6,
+            "flow_impulse_score": [1.0, 2.0, 3.0, 4.0, 3.5, 3.0]
+            + [1.1, 2.1, 3.1, 4.1, 3.6, 3.1]
+            + [4.0, 3.0, 2.0, 1.0, 1.2, 0.8],
+            "imbalance_z": [1.0, 1.0, 1.0, 1.0, 0.8, 0.6]
+            + [1.0, 1.0, 1.0, 1.0, 0.8, 0.6]
+            + [-1.0, -1.0, -1.0, -1.0, -0.8, -0.6],
+        }
+    )
+
+    numpy_edges = build_flow_alignment_edges(
+        features_1m=features,
+        snapshot_time=pd.Timestamp("2026-01-02T14:37:00Z"),
+        min_score=0.9,
+        top_k_per_symbol=1,
+        backend="cpu_numpy",
+    )
+    torch_edges = build_flow_alignment_edges(
+        features_1m=features,
+        snapshot_time=pd.Timestamp("2026-01-02T14:37:00Z"),
+        min_score=0.9,
+        top_k_per_symbol=1,
+        backend="torch_cpu",
+        torch_device="cpu",
+    )
+
+    assert len(numpy_edges) == len(torch_edges) == 1
+    assert {numpy_edges[0].source_symbol, numpy_edges[0].target_symbol} == {
+        torch_edges[0].source_symbol,
+        torch_edges[0].target_symbol,
+    }
+    assert abs(numpy_edges[0].weight - torch_edges[0].weight) < 1e-8
+    assert torch_edges[0].calculation_backend == "torch_cpu_v1"
+
+
 def test_dtw_trade_flow_similarity_builds_edge_from_flow_shape():
     timestamps = _timestamp_range(20)
     base = [float(index % 6) + 0.1 * index for index in range(20)]
@@ -207,7 +247,7 @@ def test_dtw_trade_flow_similarity_builds_edge_from_flow_shape():
 
     assert len(edges) == 1
     assert edges[0].graph_layer == "dtw_trade_flow_similarity_graph"
-    assert edges[0].edge_confidence == 0.75
+    assert edges[0].edge_confidence == 0.8
     assert edges[0].support_points >= 8
 
 
@@ -326,6 +366,45 @@ def test_volume_expansion_graph_uses_volume_z_and_coexpansion():
 
     assert len(edges) == 1
     assert {edges[0].source_symbol, edges[0].target_symbol} == {"AAA", "BBB"}
+
+
+def test_volume_expansion_torch_cpu_matches_numpy_backend():
+    timestamps = _timestamp_range(6)
+    frame = pd.DataFrame(
+        {
+            "timestamp": timestamps * 3,
+            "symbol": ["AAA"] * 6 + ["BBB"] * 6 + ["CCC"] * 6,
+            "volume_z_12": [2.0, 2.5, 3.0, 3.5, 2.8, 2.2]
+            + [2.1, 2.6, 3.1, 3.6, 2.9, 2.3]
+            + [0.1, 0.2, 0.3, 0.4, 0.3, 0.2],
+        }
+    )
+
+    numpy_edges = build_volume_expansion_edges(
+        feature_frame=frame,
+        snapshot_time=pd.Timestamp("2026-01-02T14:37:00Z"),
+        min_score=0.9,
+        threshold=1.5,
+        top_k_per_symbol=1,
+        backend="cpu_numpy",
+    )
+    torch_edges = build_volume_expansion_edges(
+        feature_frame=frame,
+        snapshot_time=pd.Timestamp("2026-01-02T14:37:00Z"),
+        min_score=0.9,
+        threshold=1.5,
+        top_k_per_symbol=1,
+        backend="torch_cpu",
+        torch_device="cpu",
+    )
+
+    assert len(numpy_edges) == len(torch_edges) == 1
+    assert {numpy_edges[0].source_symbol, numpy_edges[0].target_symbol} == {
+        torch_edges[0].source_symbol,
+        torch_edges[0].target_symbol,
+    }
+    assert abs(numpy_edges[0].weight - torch_edges[0].weight) < 1e-8
+    assert torch_edges[0].calculation_backend == "torch_cpu_v1"
 
 
 def test_large_trade_alignment_graph_uses_large_trade_ratio():

@@ -196,7 +196,9 @@ test("server exposes progress api and progress page", async () => {
   const databasePath = path.join(tempDir, "stocknetv2.duckdb");
   const progressPath = path.join(tempDir, "progress.json");
   const logPath = path.join(tempDir, "run.log");
+  const liveProgressDir = path.join(tempDir, "windows", "2025-02", "_live_progress");
   await seedDatabase(databasePath);
+  fs.mkdirSync(liveProgressDir, { recursive: true });
   fs.writeFileSync(
     progressPath,
     JSON.stringify(
@@ -211,6 +213,32 @@ test("server exposes progress api and progress page", async () => {
         current_stage: "graph_build",
         dtw_backend: "torch_cuda",
         gpu_name: "NVIDIA GeForce RTX 5090",
+        windows: [
+          {
+            window_id: "2025-02",
+            status: "running",
+            total_trade_dates: 19,
+            completed_trade_dates: 0,
+            trade_dates: [],
+          },
+        ],
+      },
+      null,
+      2,
+    ),
+  );
+  fs.writeFileSync(
+    path.join(liveProgressDir, "2025-02-03.json"),
+    JSON.stringify(
+      {
+        trade_date: "2025-02-03",
+        status: "running",
+        snapshot_id: "qualification_2025-02-03_1435",
+        snapshot_index: 1,
+        total_snapshots: 78,
+        snapshot_clock_code: "1435",
+        available_minutes_since_open: 5,
+        progress_percent: 1.2821,
       },
       null,
       2,
@@ -226,6 +254,12 @@ test("server exposes progress api and progress page", async () => {
     const progressPayload = await progressRes.json();
     assert.equal(progressPayload.progress.status, "running");
     assert.equal(progressPayload.progress.completed_windows, 1);
+    assert.equal(progressPayload.progress.current_trade_date, "2025-02-03");
+    assert.equal(progressPayload.progress.current_snapshot_clock_code, "1435");
+    assert.equal(progressPayload.progress.windows[0].trade_dates[0].snapshot_index, 1);
+    assert.equal(progressPayload.progress.windows[0].trade_dates[0].elapsed_display.includes(":"), true);
+    assert.equal(progressPayload.progress.windows[0].trade_dates[0].avg_snapshot_display, "-");
+    assert.match(progressPayload.logs.join("\n"), /\[live\] 2025-02 2025-02-03/);
     assert.match(progressPayload.logs.join("\n"), /window 2025-02 started/);
 
     const pageRes = await fetch(`${baseUrl}/progress`);
@@ -233,8 +267,11 @@ test("server exposes progress api and progress page", async () => {
     const pageHtml = await pageRes.text();
     assert.match(pageHtml, /StockNetV2 Qualification Progress/);
     assert.match(pageHtml, /EventSource\("\/api\/progress\/stream"\)/);
+    assert.match(pageHtml, /Current Trade Date/);
+    assert.match(pageHtml, /Current Snapshot/);
     assert.match(pageHtml, /DTW Backend/);
     assert.match(pageHtml, /GPU/);
+    assert.match(pageHtml, /avg_snapshot=/);
   });
   delete process.env.STOCKNETV2_PROGRESS_FILE;
   delete process.env.STOCKNETV2_LOG_FILE;
@@ -269,4 +306,53 @@ test("server keeps progress stream alive when progress files are not created yet
 
   delete process.env.STOCKNETV2_PROGRESS_FILE;
   delete process.env.STOCKNETV2_LOG_FILE;
+});
+
+test("server exposes benchmark progress api and renders benchmark details on progress page", async () => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "stocknetv2-benchmark-"));
+  const databasePath = path.join(tempDir, "stocknetv2.duckdb");
+  const benchmarkStatusPath = path.join(tempDir, "benchmark_status.json");
+  const benchmarkLogPath = path.join(tempDir, "benchmark.log");
+  await seedDatabase(databasePath);
+
+  fs.writeFileSync(
+    benchmarkStatusPath,
+    JSON.stringify(
+      {
+        status: "running",
+        current_benchmark_type: "inner_throughput",
+        current_candidate_id: "gpu_batch1024_layer2",
+        current_trade_date: "2025-01-02",
+        current_snapshot_clock_code: "1450",
+        decision_state: "gathering_inner_throughput",
+        completed_candidates: 1,
+        total_candidates: 9,
+      },
+      null,
+      2,
+    ),
+  );
+  fs.writeFileSync(benchmarkLogPath, "inner candidate gpu_batch1024_layer2 started\n");
+
+  process.env.STOCKNETV2_BENCHMARK_STATUS_FILE = benchmarkStatusPath;
+  process.env.STOCKNETV2_BENCHMARK_LOG_FILE = benchmarkLogPath;
+
+  await withServer(databasePath, async (baseUrl) => {
+    const benchmarkRes = await fetch(`${baseUrl}/api/benchmark-progress`);
+    assert.equal(benchmarkRes.status, 200);
+    const benchmarkPayload = await benchmarkRes.json();
+    assert.equal(benchmarkPayload.benchmark.status, "running");
+    assert.equal(benchmarkPayload.benchmark.current_candidate_id, "gpu_batch1024_layer2");
+    assert.match(benchmarkPayload.logs.join("\n"), /started/);
+
+    const pageRes = await fetch(`${baseUrl}/progress`);
+    assert.equal(pageRes.status, 200);
+    const pageHtml = await pageRes.text();
+    assert.match(pageHtml, /Benchmark Status/);
+    assert.match(pageHtml, /Current Candidate/);
+    assert.match(pageHtml, /Decision State/);
+  });
+
+  delete process.env.STOCKNETV2_BENCHMARK_STATUS_FILE;
+  delete process.env.STOCKNETV2_BENCHMARK_LOG_FILE;
 });

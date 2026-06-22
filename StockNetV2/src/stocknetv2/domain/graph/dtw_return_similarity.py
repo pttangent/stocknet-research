@@ -23,14 +23,25 @@ def build_dtw_return_similarity_edges(
     reciprocal_top_k: int | None = None,
     degree_cap: int | None = None,
     min_overlap_points: int = 8,
+    min_overlap_floor_points: int = 5,
     min_variance: float = 1e-8,
+    warmup_min_minutes: int = 5,
+    max_lookback_minutes: int = 30,
     backend: str = "cpu_python",
     torch_device: str = "auto",
     torch_batch_pair_threshold: int = 1024,
 ) -> list[GraphEdge]:
-    window_info = compute_effective_dtw_window(snapshot_time=snapshot_time, session_open=session_open)
+    window_info = compute_effective_dtw_window(
+        snapshot_time=snapshot_time,
+        session_open=session_open,
+        min_minutes=warmup_min_minutes,
+        max_minutes=max_lookback_minutes,
+        target_min_overlap_points=min_overlap_points,
+        min_overlap_floor_points=min_overlap_floor_points,
+    )
     if not window_info["enabled"]:
         return []
+    effective_min_overlap_points = int(window_info["effective_min_overlap_points"])
 
     matrix = build_pivot_matrix(
         features_1m,
@@ -44,7 +55,7 @@ def build_dtw_return_similarity_edges(
     normalized_matrix = zscore_frame_columns(matrix)
     coarse_matrix = compute_pairwise_correlation_matrix(
         normalized_matrix,
-        min_periods=min_overlap_points,
+        min_periods=effective_min_overlap_points,
         min_variance=min_variance,
     )
     symbols = matrix.columns.tolist()
@@ -59,7 +70,7 @@ def build_dtw_return_similarity_edges(
         left_symbol = symbols[left_index]
         right_symbol = symbols[right_index]
         aligned = matrix.loc[:, [left_symbol, right_symbol]].dropna()
-        if len(aligned) < min_overlap_points:
+        if len(aligned) < effective_min_overlap_points:
             continue
 
         left_std = float(aligned[left_symbol].std(ddof=0))
@@ -102,6 +113,7 @@ def build_dtw_return_similarity_edges(
                 support_points=support_points,
                 edge_confidence=float(window_info["window_confidence"]),
                 effective_lookback_minutes=int(window_info["effective_lookback_minutes"]),
+                calculation_backend=str(_effective_backend),
             )
         )
 

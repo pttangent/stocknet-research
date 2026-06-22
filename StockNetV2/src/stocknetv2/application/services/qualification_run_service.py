@@ -42,7 +42,7 @@ class QualificationRunConfig:
     code_commit: str
     run_prefix: str = "qualification-graph-build"
     config_id: str = "three-month-qualification"
-    config_name: str = "Three-month qualification run"
+    config_name: str = "Long-horizon qualification run"
     symbol_limit: int | None = None
     max_date_workers: int = 24
     layer_workers_per_process: int = 1
@@ -50,9 +50,12 @@ class QualificationRunConfig:
     continue_on_error: bool = False
     benchmark_symbols: tuple[str, ...] = ("SPY", "QQQ", "IWM", "DIA")
     bars_5m_timestamp_semantics: str = "bar_close_time"
+    graph_backend: str = "torch_cuda"
+    graph_torch_device: str = "cuda"
     dtw_backend: str = "torch_cuda"
     dtw_torch_device: str = "cuda"
     dtw_torch_batch_pair_threshold: int = 1024
+    graph_build_execution_mode: str = "trade_date_shards"
     git_push_enabled: bool = True
     git_remote: str = "origin"
     git_branch: str | None = None
@@ -145,6 +148,18 @@ class QualificationRunService:
                 "failure_count": 0,
                 "graph_db_path": "",
                 "evaluation_pack_dir": "",
+                "trade_dates": [
+                    {
+                        "trade_date": trade_date,
+                        "status": "pending",
+                        "snapshot_index": 0,
+                        "total_snapshots": 78,
+                        "snapshot_clock_code": None,
+                        "available_minutes_since_open": None,
+                        "progress_percent": 0.0,
+                    }
+                    for trade_date in window_trade_dates[window.window_id]
+                ],
             }
             for window in windows
         ]
@@ -156,10 +171,15 @@ class QualificationRunService:
             "total_trade_dates": total_trade_dates,
             "completed_trade_dates": 0,
             "current_window_id": None,
+            "current_trade_date": None,
+            "current_snapshot_id": None,
+            "current_snapshot_clock_code": None,
             "current_stage": "initializing",
             "updated_at": None,
             "bars_5m_timestamp_semantics": config.bars_5m_timestamp_semantics,
             "benchmark_symbols": list(config.benchmark_symbols),
+            "graph_backend": config.graph_backend,
+            "graph_torch_device": config.graph_torch_device,
             "dtw_backend": config.dtw_backend,
             "dtw_torch_device": config.dtw_torch_device,
             "dtw_torch_batch_pair_threshold": config.dtw_torch_batch_pair_threshold,
@@ -177,9 +197,12 @@ class QualificationRunService:
                     "code_commit": config.code_commit,
                     "bars_5m_timestamp_semantics": config.bars_5m_timestamp_semantics,
                     "benchmark_symbols": list(config.benchmark_symbols),
+                    "graph_backend": config.graph_backend,
+                    "graph_torch_device": config.graph_torch_device,
                     "dtw_backend": config.dtw_backend,
                     "dtw_torch_device": config.dtw_torch_device,
                     "dtw_torch_batch_pair_threshold": config.dtw_torch_batch_pair_threshold,
+                    "graph_build_execution_mode": config.graph_build_execution_mode,
                     "gpu_name": progress_state["gpu_name"],
                     "windows": [
                         {
@@ -198,7 +221,7 @@ class QualificationRunService:
         )
         self._append_log(
             log_path,
-            f"qualification run initialized: {config.run_label} | dtw_backend={config.dtw_backend} | dtw_torch_device={config.dtw_torch_device} | dtw_torch_batch_pair_threshold={config.dtw_torch_batch_pair_threshold}",
+            f"qualification run initialized: {config.run_label} | graph_backend={config.graph_backend} | graph_torch_device={config.graph_torch_device} | dtw_backend={config.dtw_backend} | dtw_torch_device={config.dtw_torch_device} | dtw_torch_batch_pair_threshold={config.dtw_torch_batch_pair_threshold}",
         )
         self._write_progress(progress_path, progress_state)
 
@@ -249,8 +272,29 @@ class QualificationRunService:
                 elif status == "shard_completed":
                     window_state["completed_trade_dates"] = int(event.get("completed_dates", 0) or 0)
                     progress_state["completed_trade_dates"] = base_completed_trade_dates + window_state["completed_trade_dates"]
+                    trade_date_state = self._trade_date_state(window_state, str(event.get("trade_date", "")))
+                    if trade_date_state is not None:
+                        trade_date_state["status"] = "completed"
+                        trade_date_state["snapshot_index"] = int(event.get("snapshot_count", 0) or 0)
+                        trade_date_state["total_snapshots"] = int(event.get("snapshot_count", 0) or 0)
+                        trade_date_state["progress_percent"] = 100.0
                 elif status == "shard_failed":
                     window_state["failure_count"] = int(window_state.get("failure_count", 0) or 0) + 1
+                    trade_date_state = self._trade_date_state(window_state, str(event.get("trade_date", "")))
+                    if trade_date_state is not None:
+                        trade_date_state["status"] = "failed"
+                elif status == "snapshot_progress":
+                    trade_date_state = self._trade_date_state(window_state, str(event.get("trade_date", "")))
+                    if trade_date_state is not None:
+                        trade_date_state["status"] = "running"
+                        trade_date_state["snapshot_index"] = int(event.get("snapshot_index", 0) or 0)
+                        trade_date_state["total_snapshots"] = int(event.get("total_snapshots", 0) or 0)
+                        trade_date_state["snapshot_clock_code"] = event.get("snapshot_clock_code")
+                        trade_date_state["available_minutes_since_open"] = event.get("available_minutes_since_open")
+                        trade_date_state["progress_percent"] = float(event.get("progress_percent", 0.0) or 0.0)
+                        progress_state["current_trade_date"] = trade_date_state["trade_date"]
+                        progress_state["current_snapshot_id"] = event.get("snapshot_id")
+                        progress_state["current_snapshot_clock_code"] = event.get("snapshot_clock_code")
                 elif status == "range_completed":
                     progress_state["completed_trade_dates"] = base_completed_trade_dates + len(
                         event.get("processed_dates", [])
@@ -375,9 +419,12 @@ class QualificationRunService:
             continue_on_error=config.continue_on_error,
             keep_shards=config.keep_shards,
             layer_workers_per_process=max(1, config.layer_workers_per_process),
+            graph_backend=config.graph_backend,
+            graph_torch_device=config.graph_torch_device,
             dtw_backend=config.dtw_backend,
             dtw_torch_device=config.dtw_torch_device,
             dtw_torch_batch_pair_threshold=max(1, config.dtw_torch_batch_pair_threshold),
+            execution_mode=config.graph_build_execution_mode,
         )
         if self._graph_range_runner is not None:
             return self._graph_range_runner(graph_config, progress_callback=progress_callback)
@@ -409,11 +456,19 @@ class QualificationRunService:
         raise KeyError(f"Unknown window id: {window_id}")
 
     @staticmethod
+    def _trade_date_state(window_state: dict[str, Any], trade_date: str) -> dict[str, Any] | None:
+        for row in window_state.get("trade_dates", []):
+            if row.get("trade_date") == trade_date:
+                return row
+        return None
+
+    @staticmethod
     def _refresh_root_outputs(output_root: Path, window_results: list[QualificationWindowResult]) -> None:
         _write_monthly_run_status(output_root / "monthly_run_status.csv", window_results)
         _write_monthly_alpha_summary(output_root / "monthly_alpha_summary.csv", window_results)
         _write_benchmark_label_source_summary(output_root / "benchmark_label_source_summary.csv", window_results)
         _write_cross_month_alpha_comparison(output_root / "cross_month_alpha_comparison.csv", window_results)
+        _write_cross_month_layer_stability(output_root / "cross_month_layer_stability.csv", window_results)
         _write_artifact_inventory(output_root / "artifact_inventory.csv", window_results)
 
     @staticmethod
@@ -422,6 +477,7 @@ class QualificationRunService:
             ("monthly_run_status", output_root / "monthly_run_status.csv"),
             ("monthly_alpha_summary", output_root / "monthly_alpha_summary.csv"),
             ("cross_month_alpha_comparison", output_root / "cross_month_alpha_comparison.csv"),
+            ("cross_month_layer_stability", output_root / "cross_month_layer_stability.csv"),
             ("benchmark_label_source_summary", output_root / "benchmark_label_source_summary.csv"),
             ("artifact_inventory", output_root / "artifact_inventory.csv"),
         ]
@@ -584,6 +640,74 @@ def _write_artifact_inventory(path: Path, window_results: list[QualificationWind
                     "artifact_path": str(result.benchmark_summary_path),
                 }
             )
+    pd.DataFrame(rows).to_csv(path, index=False)
+
+
+def _write_cross_month_layer_stability(path: Path, window_results: list[QualificationWindowResult]) -> None:
+    monthly_alpha_summary_path = path.parent / "monthly_alpha_summary.csv"
+    if not monthly_alpha_summary_path.exists():
+        pd.DataFrame(
+            columns=[
+                "window_id",
+                "graph_layer",
+                "layer_role",
+                "top_factor_name",
+                "top_label_horizon",
+                "top_label_variant",
+                "top_score",
+                "previous_window_id",
+                "same_factor_as_previous",
+                "same_role_as_previous",
+                "score_delta_vs_previous",
+                "stability_bucket",
+            ]
+        ).to_csv(path, index=False)
+        return
+
+    summary = pd.read_csv(monthly_alpha_summary_path)
+    if summary.empty:
+        summary.to_csv(path, index=False)
+        return
+
+    prepared = summary.copy()
+    prepared["top_score"] = pd.to_numeric(prepared["top_score"], errors="coerce")
+    prepared = prepared.sort_values(["graph_layer", "window_id"]).reset_index(drop=True)
+    rows: list[dict[str, Any]] = []
+    for _graph_layer, group in prepared.groupby("graph_layer", sort=True):
+        previous_row: pd.Series | None = None
+        for _, row in group.iterrows():
+            payload = row.to_dict()
+            if previous_row is None:
+                rows.append(
+                    {
+                        **payload,
+                        "previous_window_id": "",
+                        "same_factor_as_previous": False,
+                        "same_role_as_previous": False,
+                        "score_delta_vs_previous": None,
+                        "stability_bucket": "seed_window",
+                    }
+                )
+            else:
+                same_factor = row.get("top_factor_name") == previous_row.get("top_factor_name")
+                same_role = row.get("layer_role") == previous_row.get("layer_role")
+                score_delta = (
+                    float(row["top_score"] - previous_row["top_score"])
+                    if pd.notna(row.get("top_score")) and pd.notna(previous_row.get("top_score"))
+                    else None
+                )
+                rows.append(
+                    {
+                        **payload,
+                        "previous_window_id": previous_row.get("window_id", ""),
+                        "same_factor_as_previous": same_factor,
+                        "same_role_as_previous": same_role,
+                        "score_delta_vs_previous": score_delta,
+                        "stability_bucket": "stable_positive" if same_factor and same_role else "rotating_signal",
+                    }
+                )
+            previous_row = row
+
     pd.DataFrame(rows).to_csv(path, index=False)
 
 

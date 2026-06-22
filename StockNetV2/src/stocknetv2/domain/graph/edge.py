@@ -18,3 +18,4 @@ class GraphEdge:
     support_points: int
     edge_confidence: float = 1.0
     effective_lookback_minutes: int | None = None
+    calculation_backend: str = "cpu_python"

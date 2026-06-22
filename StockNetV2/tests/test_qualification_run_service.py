@@ -108,6 +108,18 @@ def test_qualification_run_service_writes_monthly_outputs_and_progress(tmp_path)
         )
         shard_results: list[GraphBuildShardResult] = []
         for trade_date in trade_dates:
+            progress_callback(
+                {
+                    "status": "snapshot_progress",
+                    "trade_date": trade_date,
+                    "snapshot_id": f"{config.run_prefix}_{trade_date}_{trade_date}_1435",
+                    "snapshot_index": 1,
+                    "total_snapshots": 78,
+                    "snapshot_clock_code": "1435",
+                    "available_minutes_since_open": 5,
+                    "progress_percent": round(1 / 78 * 100, 4),
+                }
+            )
             graph_db_path = (
                 Path(config.output_database_path).parent
                 / f"{trade_date}.duckdb"
@@ -231,8 +243,14 @@ def test_qualification_run_service_writes_monthly_outputs_and_progress(tmp_path)
     assert progress_payload["dtw_backend"] == "torch_cuda"
     assert progress_payload["dtw_torch_device"] == "cuda"
     assert progress_payload["dtw_torch_batch_pair_threshold"] == 1024
+    assert progress_payload["windows"][0]["trade_dates"][0]["snapshot_index"] == 78
+    assert progress_payload["windows"][0]["trade_dates"][0]["snapshot_clock_code"] == "1435"
     assert any(
         artifact["path"].endswith("cross_month_alpha_comparison.csv")
+        for artifact in progress_payload["recent_artifacts"]
+    )
+    assert any(
+        artifact["path"].endswith("cross_month_layer_stability.csv")
         for artifact in progress_payload["recent_artifacts"]
     )
 
@@ -252,6 +270,13 @@ def test_qualification_run_service_writes_monthly_outputs_and_progress(tmp_path)
     cross_month = pd.read_csv(tmp_path / "qualification_run" / "cross_month_alpha_comparison.csv")
     assert cross_month.loc[0, "first_window_id"] == "2025-01"
     assert cross_month.loc[0, "second_window_id"] == "2025-02"
+
+    layer_stability = pd.read_csv(tmp_path / "qualification_run" / "cross_month_layer_stability.csv")
+    assert set(layer_stability["graph_layer"]) == {
+        "flow_alignment_graph",
+        "volume_expansion_graph",
+    }
+    assert set(layer_stability["stability_bucket"]) == {"seed_window", "stable_positive"}
 
     run_context = json.loads((tmp_path / "qualification_run" / "qualification_config.json").read_text(encoding="utf-8"))
     assert run_context["benchmark_symbols"] == ["SPY", "QQQ", "IWM", "DIA"]

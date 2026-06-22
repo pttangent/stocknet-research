@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
-from typing import Protocol
+from typing import Any, Callable, Protocol
 
 import pandas as pd
 
@@ -12,6 +12,10 @@ from stocknetv2.application.services.layer_execution_service import LayerExecuti
 from stocknetv2.application.services.lifecycle_service import LifecycleRecord, LifecycleService
 from stocknetv2.application.services.read_model_service import ReadModelService
 from stocknetv2.application.services.semantic_service import SemanticLabelRecord, SemanticService
+from stocknetv2.application.services.temporal_edge_replay_service import (
+    TemporalEdgeReplayService,
+    TemporalEdgeState,
+)
 from stocknetv2.application.services.theme_flow_service import ThemeFlowService
 from stocknetv2.application.services.theme_quality_service import ThemeQualityService
 from stocknetv2.infrastructure.repositories.audit_repository import AuditRepository
@@ -69,6 +73,7 @@ class ThemeDiscoveryOrchestrator:
         theme_write_repository: ThemeWriteRepository | None = None,
         semantic_service: SemanticService | None = None,
         lifecycle_service: LifecycleService | None = None,
+        temporal_edge_replay_service: TemporalEdgeReplayService | None = None,
         theme_quality_service: ThemeQualityService | None = None,
         theme_flow_service: ThemeFlowService | None = None,
         read_model_service: ReadModelService | None = None,
@@ -83,12 +88,18 @@ class ThemeDiscoveryOrchestrator:
         self._theme_write_repository = theme_write_repository
         self._semantic_service = semantic_service
         self._lifecycle_service = lifecycle_service
+        self._temporal_edge_replay_service = temporal_edge_replay_service
         self._theme_quality_service = theme_quality_service
         self._theme_flow_service = theme_flow_service
         self._read_model_service = read_model_service
         self._read_model_repository = read_model_repository
 
-    def run(self, config: ThemeDiscoveryRunConfig) -> ThemeDiscoveryRunSummary:
+    def run(
+        self,
+        config: ThemeDiscoveryRunConfig,
+        *,
+        progress_callback: Callable[[dict[str, Any]], None] | None = None,
+    ) -> ThemeDiscoveryRunSummary:
         try:
             trade_dates = self._select_trade_dates(config.date_start, config.date_end)
             if not trade_dates:
@@ -120,19 +131,29 @@ class ThemeDiscoveryOrchestrator:
             last_data_version = first_inputs.data_version
             previous_candidates = []
             previous_lifecycle_records: dict[str, LifecycleRecord] = {}
+            previous_temporal_edge_states: dict[tuple[str, str, str], TemporalEdgeState] = {}
 
             for trade_date in trade_dates:
                 inputs = self._market_repository.load_trade_date_inputs(trade_date)
                 last_data_version = inputs.data_version
                 lineage_records.extend(self._build_lineage_records(inputs))
                 session_open = self._snapshot_clock.session_open_timestamp(trade_date)
+                snapshots = list(self._snapshot_clock.iter_trade_date(trade_date))
                 completed_snapshot_ids = self._audit_repository.list_completed_snapshot_ids(
                     run_id=config.run_id,
                     trade_date=trade_date,
                     expected_layer_count=6,
                 )
+                if progress_callback is not None:
+                    progress_callback(
+                        {
+                            "status": "trade_date_started",
+                            "trade_date": trade_date,
+                            "total_snapshots": len(snapshots),
+                        }
+                    )
 
-                for snapshot_time in self._snapshot_clock.iter_trade_date(trade_date):
+                for snapshot_index, snapshot_time in enumerate(snapshots, start=1):
                     snapshot_id = f"{config.run_id}_{trade_date}_{snapshot_time.strftime('%H%M')}"
                     available_minutes = int((snapshot_time - session_open).total_seconds() // 60)
                     snapshot_rows.append(
@@ -147,6 +168,23 @@ class ThemeDiscoveryOrchestrator:
                             "available_minutes_since_open": available_minutes,
                         }
                     )
+                    if progress_callback is not None:
+                        progress_callback(
+                            {
+                                "status": "snapshot_progress",
+                                "trade_date": trade_date,
+                                "snapshot_id": snapshot_id,
+                                "snapshot_index": snapshot_index,
+                                "total_snapshots": len(snapshots),
+                                "snapshot_clock_code": snapshot_time.strftime("%H%M"),
+                                "available_minutes_since_open": available_minutes,
+                                "progress_percent": round(
+                                    ((snapshot_index - 1) / max(1, len(snapshots))) * 100.0,
+                                    4,
+                                ),
+                                "stage": "snapshot_started",
+                            }
+                        )
                     if snapshot_id in completed_snapshot_ids:
                         continue
                     if self._layer_execution_service and self._graph_write_repository:
@@ -167,6 +205,16 @@ class ThemeDiscoveryOrchestrator:
                             if "symbol" in inputs.bars_5m.columns
                             else None,
                         )
+                        if self._temporal_edge_replay_service:
+                            temporal_edge_states, previous_temporal_edge_states = self._temporal_edge_replay_service.replay(
+                                run_id=config.run_id,
+                                snapshot_id=snapshot_id,
+                                trade_date=trade_date,
+                                timestamp=snapshot_time,
+                                layer_edges=layer_result.layer_edges,
+                                previous_states=previous_temporal_edge_states,
+                            )
+                            self._graph_write_repository.save_temporal_edge_states(records=temporal_edge_states)
                         if config.graph_build_only:
                             continue
                         if self._consensus_service and self._theme_write_repository:
@@ -240,6 +288,23 @@ class ThemeDiscoveryOrchestrator:
                             previous_lifecycle_records = {
                                 record.theme_instance_id: record for record in lifecycle_records
                             } or previous_lifecycle_records
+                    if progress_callback is not None:
+                        progress_callback(
+                            {
+                                "status": "snapshot_progress",
+                                "trade_date": trade_date,
+                                "snapshot_id": snapshot_id,
+                                "snapshot_index": snapshot_index,
+                                "total_snapshots": len(snapshots),
+                                "snapshot_clock_code": snapshot_time.strftime("%H%M"),
+                                "available_minutes_since_open": available_minutes,
+                                "progress_percent": round(
+                                    (snapshot_index / max(1, len(snapshots))) * 100.0,
+                                    4,
+                                ),
+                                "stage": "snapshot_completed",
+                            }
+                        )
 
             self._audit_repository.add_input_lineage(run_id=config.run_id, snapshot_id=None, records=lineage_records)
             self._audit_repository.create_snapshots(snapshot_rows)

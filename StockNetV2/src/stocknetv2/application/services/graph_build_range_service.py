@@ -1,18 +1,30 @@
 from __future__ import annotations
 
+import json
 import os
 import shutil
 import tempfile
 import time
 from concurrent.futures import Executor, Future, ProcessPoolExecutor
 from dataclasses import dataclass
+from datetime import UTC, datetime
 import multiprocessing as mp
 from pathlib import Path
 from typing import Callable, Protocol
 
 import duckdb
 
+from stocknetv2.application.services.layer_execution_service import LayerExecutionService
+from stocknetv2.application.services.snapshot_round_robin_graph_build_service import (
+    SnapshotRoundRobinGraphBuildService,
+)
+from stocknetv2.application.services.temporal_edge_replay_service import TemporalEdgeReplayService
+from stocknetv2.domain.graph.layer_config import build_theme_discovery_settings
+from stocknetv2.domain.snapshot.snapshot_clock import SnapshotClock
 from stocknetv2.infrastructure.db.schema_manager import SchemaManager
+from stocknetv2.infrastructure.repositories.audit_repository import AuditRepository
+from stocknetv2.infrastructure.repositories.graph_write_repository import GraphWriteRepository
+from stocknetv2.infrastructure.repositories.market_read_repository import LegacySourceLayout, MarketReadRepository
 from stocknetv2.interfaces.cli.run_theme_discovery_t1 import run_theme_discovery
 
 for _thread_env_var in ("OMP_NUM_THREADS", "MKL_NUM_THREADS", "NUMEXPR_NUM_THREADS"):
@@ -39,9 +51,12 @@ class GraphBuildRangeConfig:
     shard_directory: Path | str | None = None
     keep_shards: bool = False
     layer_workers_per_process: int = 1
+    graph_backend: str = "cpu_numpy"
+    graph_torch_device: str = "auto"
     dtw_backend: str = "cpu_python"
     dtw_torch_device: str = "auto"
     dtw_torch_batch_pair_threshold: int = 1024
+    execution_mode: str = "trade_date_shards"
 
 
 @dataclass(frozen=True)
@@ -57,9 +72,12 @@ class GraphBuildShardTask:
     config_version: str
     code_commit: str
     layer_workers: int
+    graph_backend: str
+    graph_torch_device: str
     dtw_backend: str
     dtw_torch_device: str
     dtw_torch_batch_pair_threshold: int
+    live_progress_dir: Path | None = None
 
 
 @dataclass(frozen=True)
@@ -96,11 +114,13 @@ class GraphBuildRangeService:
         market_calendar: MarketCalendarProtocol,
         max_workers: int = 1,
         shard_runner: Callable[[GraphBuildShardTask], GraphBuildShardResult] | None = None,
+        round_robin_runner: Callable[..., GraphBuildRangeSummary] | None = None,
         executor_factory: Callable[[int], Executor] | None = None,
     ) -> None:
         self._market_calendar = market_calendar
         self._max_workers = max(1, max_workers)
         self._shard_runner = shard_runner or _run_graph_build_shard
+        self._round_robin_runner = round_robin_runner or _run_snapshot_round_robin_range
         self._executor_factory = executor_factory or _build_graph_range_executor
 
     def run(
@@ -120,6 +140,12 @@ class GraphBuildRangeService:
 
         output_database_path = Path(config.output_database_path).expanduser().resolve()
         output_database_path.parent.mkdir(parents=True, exist_ok=True)
+        if config.execution_mode == "snapshot_round_robin":
+            return self._round_robin_runner(
+                config,
+                trade_dates=trade_dates,
+                progress_callback=progress_callback,
+            )
         shard_directory, should_cleanup_shards = self._resolve_shard_directory(config, output_database_path)
         tasks = [
             GraphBuildShardTask(
@@ -134,9 +160,12 @@ class GraphBuildRangeService:
                 config_version=config.config_version,
                 code_commit=config.code_commit,
                 layer_workers=max(1, config.layer_workers_per_process),
+                graph_backend=config.graph_backend,
+                graph_torch_device=config.graph_torch_device,
                 dtw_backend=config.dtw_backend,
                 dtw_torch_device=config.dtw_torch_device,
                 dtw_torch_batch_pair_threshold=max(1, config.dtw_torch_batch_pair_threshold),
+                live_progress_dir=output_database_path.parent / "_live_progress",
             )
             for trade_date in trade_dates
         ]
@@ -288,33 +317,59 @@ def _run_graph_build_shard(task: GraphBuildShardTask) -> GraphBuildShardResult:
     if task.database_path.exists():
         task.database_path.unlink()
     started_at = time.perf_counter()
-    summary = run_theme_discovery(
-        database_path=task.database_path,
-        legacy_data_root=task.data_root,
-        symbol_limit=task.symbol_limit,
-        graph_build_only=True,
-        run_id=task.run_id,
-        run_name=task.run_name,
-        date_start=task.trade_date,
-        date_end=task.trade_date,
-        config_id=task.config_id,
-        config_name=task.config_name,
-        config_scope="t1",
-        config_version=task.config_version,
-        code_commit=task.code_commit,
-        layer_workers=task.layer_workers,
-        dtw_backend=task.dtw_backend,
-        dtw_torch_device=task.dtw_torch_device,
-        dtw_torch_batch_pair_threshold=task.dtw_torch_batch_pair_threshold,
-    )
-    return GraphBuildShardResult(
-        trade_date=task.trade_date,
-        run_id=task.run_id,
-        database_path=task.database_path,
-        snapshot_count=summary.snapshot_count,
-        data_version=summary.data_version,
-        elapsed_seconds=round(time.perf_counter() - started_at, 2),
-    )
+    progress_writer = _build_shard_live_progress_writer(task)
+    try:
+        summary = run_theme_discovery(
+            database_path=task.database_path,
+            legacy_data_root=task.data_root,
+            symbol_limit=task.symbol_limit,
+            graph_build_only=True,
+            run_id=task.run_id,
+            run_name=task.run_name,
+            date_start=task.trade_date,
+            date_end=task.trade_date,
+            config_id=task.config_id,
+            config_name=task.config_name,
+            config_scope="t1",
+            config_version=task.config_version,
+            code_commit=task.code_commit,
+            layer_workers=task.layer_workers,
+            graph_backend=task.graph_backend,
+            graph_torch_device=task.graph_torch_device,
+            dtw_backend=task.dtw_backend,
+            dtw_torch_device=task.dtw_torch_device,
+            dtw_torch_batch_pair_threshold=task.dtw_torch_batch_pair_threshold,
+            progress_callback=progress_writer,
+        )
+        progress_writer(
+            {
+                "status": "trade_date_completed",
+                "trade_date": task.trade_date,
+                "snapshot_index": summary.snapshot_count,
+                "total_snapshots": summary.snapshot_count,
+                "progress_percent": 100.0,
+                "stage": "trade_date_completed",
+            }
+        )
+        return GraphBuildShardResult(
+            trade_date=task.trade_date,
+            run_id=task.run_id,
+            database_path=task.database_path,
+            snapshot_count=summary.snapshot_count,
+            data_version=summary.data_version,
+            elapsed_seconds=round(time.perf_counter() - started_at, 2),
+        )
+    except Exception as exc:
+        progress_writer(
+            {
+                "status": "trade_date_failed",
+                "trade_date": task.trade_date,
+                "error_type": type(exc).__name__,
+                "error_message": str(exc),
+                "stage": "trade_date_failed",
+            }
+        )
+        raise
 
 
 def _merge_shard_databases(output_database_path: Path, shard_paths: list[Path]) -> None:
@@ -339,7 +394,9 @@ def _merge_shard_databases(output_database_path: Path, shard_paths: list[Path]) 
                     "graph_snapshot",
                     "graph_edge_summary",
                     "graph_layer_diagnostic",
+                    "relation_observation",
                     "graph_edges_thresholded",
+                    "temporal_edge_state",
                     "layer_community",
                     "layer_community_membership",
                     "consensus_theme_candidate",
@@ -363,4 +420,88 @@ def _build_graph_range_executor(max_workers: int) -> ProcessPoolExecutor:
     return ProcessPoolExecutor(
         max_workers=max_workers,
         mp_context=mp.get_context("spawn"),
+    )
+
+
+def _build_shard_live_progress_writer(task: GraphBuildShardTask) -> Callable[[dict[str, object]], None]:
+    if task.live_progress_dir is None:
+        return lambda event: None
+
+    live_progress_dir = Path(task.live_progress_dir).expanduser().resolve()
+    live_progress_dir.mkdir(parents=True, exist_ok=True)
+    output_path = live_progress_dir / f"{task.trade_date}.json"
+
+    def _write(event: dict[str, object]) -> None:
+        payload = dict(event)
+        payload.setdefault("trade_date", task.trade_date)
+        payload.setdefault("run_id", task.run_id)
+        payload["updated_at"] = datetime.now(UTC).isoformat()
+        output_path.write_text(json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8")
+
+    return _write
+
+
+def _run_snapshot_round_robin_range(
+    config: GraphBuildRangeConfig,
+    *,
+    trade_dates: list[str],
+    progress_callback: Callable[[dict[str, object]], None] | None = None,
+) -> GraphBuildRangeSummary:
+    output_database_path = Path(config.output_database_path).expanduser().resolve()
+    output_database_path.parent.mkdir(parents=True, exist_ok=True)
+    if output_database_path.exists():
+        output_database_path.unlink()
+    wal_path = output_database_path.with_suffix(output_database_path.suffix + ".wal")
+    if wal_path.exists():
+        wal_path.unlink()
+
+    market_repository = MarketReadRepository(
+        LegacySourceLayout(data_root=Path(config.data_root).expanduser().resolve()),
+        symbol_limit=config.symbol_limit,
+    )
+    discovery_settings = build_theme_discovery_settings(
+        graph_backend=config.graph_backend,
+        graph_torch_device=config.graph_torch_device,
+        dtw_backend=config.dtw_backend,
+        dtw_torch_device=config.dtw_torch_device,
+        dtw_torch_batch_pair_threshold=config.dtw_torch_batch_pair_threshold,
+    )
+
+    connection = duckdb.connect(str(output_database_path))
+    try:
+        SchemaManager(connection).initialize()
+        summary = SnapshotRoundRobinGraphBuildService(
+            market_repository=market_repository,
+            audit_repository=AuditRepository(connection),
+            snapshot_clock=SnapshotClock(),
+            layer_execution_service=LayerExecutionService(
+                parallel_workers=max(1, config.layer_workers_per_process),
+                settings=discovery_settings,
+            ),
+            graph_write_repository=GraphWriteRepository(connection),
+            temporal_edge_replay_service=TemporalEdgeReplayService(),
+        ).run(
+            config,
+            trade_dates=trade_dates,
+            progress_callback=progress_callback,
+        )
+    finally:
+        connection.close()
+
+    return GraphBuildRangeSummary(
+        processed_dates=list(summary.processed_dates),
+        shard_results=[
+            GraphBuildShardResult(
+                trade_date=result.trade_date,
+                run_id=result.run_id,
+                database_path=result.database_path,
+                snapshot_count=result.snapshot_count,
+                data_version=result.data_version,
+                elapsed_seconds=result.elapsed_seconds,
+            )
+            for result in summary.shard_results
+        ],
+        failures=[],
+        failure_count=0,
+        elapsed_seconds=summary.elapsed_seconds,
     )

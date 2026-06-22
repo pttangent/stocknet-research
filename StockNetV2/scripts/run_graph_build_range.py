@@ -28,6 +28,32 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--symbol-limit", type=int)
     parser.add_argument("--max-date-workers", type=int, default=4)
     parser.add_argument("--layer-workers-per-process", type=int, default=1)
+    parser.add_argument(
+        "--graph-backend",
+        default="cpu_numpy",
+        choices=("cpu_numpy", "torch_cpu", "torch_cuda", "torch_auto"),
+    )
+    parser.add_argument(
+        "--graph-torch-device",
+        default="auto",
+        choices=("auto", "cpu", "cuda"),
+    )
+    parser.add_argument(
+        "--dtw-backend",
+        default="cpu_python",
+        choices=("cpu_python", "torch_cpu", "torch_cuda", "torch_auto"),
+    )
+    parser.add_argument(
+        "--dtw-torch-device",
+        default="auto",
+        choices=("auto", "cpu", "cuda"),
+    )
+    parser.add_argument("--dtw-torch-batch-pair-threshold", type=int, default=1024)
+    parser.add_argument(
+        "--execution-mode",
+        default="trade_date_shards",
+        choices=("trade_date_shards", "snapshot_round_robin"),
+    )
     parser.add_argument("--keep-shards", action="store_true")
     parser.add_argument("--continue-on-error", action="store_true")
     return parser.parse_args()
@@ -68,6 +94,12 @@ def main() -> int:
             continue_on_error=args.continue_on_error,
             keep_shards=args.keep_shards,
             layer_workers_per_process=max(1, args.layer_workers_per_process),
+            graph_backend=args.graph_backend,
+            graph_torch_device=args.graph_torch_device,
+            dtw_backend=args.dtw_backend,
+            dtw_torch_device=args.dtw_torch_device,
+            dtw_torch_batch_pair_threshold=max(1, args.dtw_torch_batch_pair_threshold),
+            execution_mode=args.execution_mode,
         )
     )
     for index, result in enumerate(summary.shard_results, start=1):

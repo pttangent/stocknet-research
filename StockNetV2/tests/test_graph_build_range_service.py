@@ -7,6 +7,7 @@ import duckdb
 
 from stocknetv2.application.services.graph_build_range_service import (
     GraphBuildRangeConfig,
+    GraphBuildRangeSummary,
     GraphBuildShardFailure,
     GraphBuildRangeService,
     GraphBuildShardResult,
@@ -314,3 +315,62 @@ def test_graph_build_range_service_emits_progress_events_for_completed_shards(tm
     assert events[1]["trade_date"] == "2025-01-02"
     assert events[2]["trade_date"] == "2025-01-03"
     assert events[3]["processed_dates"] == ["2025-01-02", "2025-01-03"]
+
+
+def test_graph_build_range_service_can_delegate_to_snapshot_round_robin_mode(tmp_path):
+    delegated: dict[str, object] = {}
+
+    def round_robin_runner(config, *, trade_dates, progress_callback):
+        delegated["execution_mode"] = config.execution_mode
+        delegated["trade_dates"] = list(trade_dates)
+        if progress_callback is not None:
+            progress_callback(
+                {
+                    "status": "range_started",
+                    "total_dates": len(trade_dates),
+                    "max_workers": 1,
+                }
+            )
+            progress_callback(
+                {
+                    "status": "range_completed",
+                    "processed_dates": trade_dates,
+                    "failure_count": 0,
+                    "elapsed_seconds": 0.5,
+                }
+            )
+        return GraphBuildRangeSummary(
+            processed_dates=list(trade_dates),
+            shard_results=[],
+            failures=[],
+            failure_count=0,
+            elapsed_seconds=0.5,
+        )
+
+    service = GraphBuildRangeService(
+        market_calendar=_StubMarketCalendar(),
+        max_workers=24,
+        round_robin_runner=round_robin_runner,
+    )
+    config = GraphBuildRangeConfig(
+        data_root=tmp_path,
+        output_database_path=tmp_path / "month.duckdb",
+        date_start="2025-01-02",
+        date_end="2025-01-03",
+        run_prefix="graph-build",
+        config_id="graph-build-config",
+        config_name="Graph build config",
+        config_version="v1",
+        code_commit="abc123",
+        execution_mode="snapshot_round_robin",
+    )
+
+    events: list[dict[str, object]] = []
+    summary = service.run(config, progress_callback=events.append)
+
+    assert delegated == {
+        "execution_mode": "snapshot_round_robin",
+        "trade_dates": ["2025-01-02", "2025-01-03"],
+    }
+    assert summary.processed_dates == ["2025-01-02", "2025-01-03"]
+    assert [event["status"] for event in events] == ["range_started", "range_completed"]

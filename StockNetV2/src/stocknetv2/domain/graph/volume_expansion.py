@@ -10,6 +10,11 @@ from stocknetv2.domain.graph.series_utils import (
     compute_pairwise_correlation_matrix,
     select_topk_pair_indices,
 )
+from stocknetv2.domain.graph.torch_graph_backend import (
+    compute_activity_metrics_torch,
+    resolve_graph_backend,
+    resolve_graph_torch_device,
+)
 
 ACTIVITY_LAYER_LOOKBACK_MINUTES = 60
 
@@ -23,6 +28,8 @@ def build_volume_expansion_edges(
     top_k_per_symbol: int,
     reciprocal_top_k: int | None = None,
     degree_cap: int | None = None,
+    backend: str = "cpu_numpy",
+    torch_device: str = "auto",
 ) -> list[GraphEdge]:
     value_matrix = build_pivot_matrix(
         feature_frame,
@@ -40,6 +47,8 @@ def build_volume_expansion_edges(
         top_k_per_symbol=top_k_per_symbol,
         reciprocal_top_k=reciprocal_top_k,
         degree_cap=degree_cap,
+        backend=backend,
+        torch_device=torch_device,
     )
 
 
@@ -54,6 +63,8 @@ def _build_activity_edges(
     top_k_per_symbol: int,
     reciprocal_top_k: int | None,
     degree_cap: int | None,
+    backend: str,
+    torch_device: str,
 ) -> list[GraphEdge]:
     if value_matrix.empty:
         return []
@@ -62,10 +73,20 @@ def _build_activity_edges(
         return []
     value_matrix = value_matrix.loc[:, active_columns].copy()
 
-    correlation_matrix = compute_pairwise_correlation_matrix(value_matrix)
-    co_expansion_matrix = compute_above_threshold_ratio(value_matrix, threshold)
+    effective_backend = resolve_graph_backend(requested_backend=backend, torch_device=torch_device)
+    if effective_backend == "cpu_numpy":
+        correlation_matrix = compute_pairwise_correlation_matrix(value_matrix)
+        co_expansion_matrix = compute_above_threshold_ratio(value_matrix, threshold)
+        overlap_counts = compute_overlap_counts(value_matrix)
+        calculation_backend = "cpu_numpy_v1"
+    else:
+        correlation_matrix, co_expansion_matrix, overlap_counts = compute_activity_metrics_torch(
+            value_matrix,
+            threshold=threshold,
+            device=resolve_graph_torch_device(effective_backend=effective_backend, torch_device=torch_device),
+        )
+        calculation_backend = f"{effective_backend}_v1"
     score_matrix = 0.5 * correlation_matrix + 0.5 * co_expansion_matrix
-    overlap_counts = compute_overlap_counts(value_matrix)
     symbols = value_matrix.columns.tolist()
 
     edges: list[GraphEdge] = []
@@ -87,6 +108,7 @@ def _build_activity_edges(
                 weight=score,
                 raw_score=score,
                 support_points=int(overlap_counts[left_index, right_index]),
+                calculation_backend=calculation_backend,
             )
         )
     return edges

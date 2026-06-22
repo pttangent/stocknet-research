@@ -67,6 +67,9 @@ function getDefaultProgressPayload() {
     total_trade_dates: 0,
     completed_trade_dates: 0,
     current_window_id: null,
+    current_trade_date: null,
+    current_snapshot_id: null,
+    current_snapshot_clock_code: null,
     current_stage: "idle",
     dtw_backend: "cpu_python",
     dtw_torch_device: "auto",
@@ -78,6 +81,20 @@ function getDefaultProgressPayload() {
   };
 }
 
+function formatDurationCompact(totalSeconds) {
+  if (!Number.isFinite(totalSeconds) || totalSeconds < 0) {
+    return "-";
+  }
+  const roundedSeconds = Math.floor(totalSeconds);
+  const hours = Math.floor(roundedSeconds / 3600);
+  const minutes = Math.floor((roundedSeconds % 3600) / 60);
+  const seconds = roundedSeconds % 60;
+  if (hours > 0) {
+    return `${String(hours).padStart(2, "0")}:${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`;
+  }
+  return `${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`;
+}
+
 function readProgressPayload() {
   const progressPath = getProgressFilePath();
   if (!progressPath || !fs.existsSync(progressPath)) {
@@ -85,10 +102,122 @@ function readProgressPayload() {
   }
   try {
     const payload = JSON.parse(fs.readFileSync(progressPath, "utf8"));
-    return { ...getDefaultProgressPayload(), ...payload };
+    return augmentProgressPayload({ ...getDefaultProgressPayload(), ...payload }, progressPath);
   } catch {
     return { ...getDefaultProgressPayload(), status: "progress_read_error" };
   }
+}
+
+function augmentProgressPayload(progress, progressPath) {
+  const currentWindowId = progress.current_window_id;
+  if (!currentWindowId || !progressPath) {
+    return progress;
+  }
+  const runRoot = path.dirname(progressPath);
+  const liveProgressDir = path.join(runRoot, "windows", currentWindowId, "_live_progress");
+  if (!fs.existsSync(liveProgressDir)) {
+    return progress;
+  }
+
+  const liveRows = fs.readdirSync(liveProgressDir)
+    .filter((fileName) => fileName.endsWith(".json"))
+    .map((fileName) => {
+      try {
+        const liveFilePath = path.join(liveProgressDir, fileName);
+        return {
+          ...JSON.parse(fs.readFileSync(liveFilePath, "utf8")),
+          __file_path: liveFilePath,
+        };
+      } catch {
+        return null;
+      }
+    })
+    .filter(Boolean)
+    .sort((left, right) => String(right.updated_at || "").localeCompare(String(left.updated_at || "")));
+
+  if (liveRows.length === 0) {
+    return progress;
+  }
+
+  const windows = Array.isArray(progress.windows) ? [...progress.windows] : [];
+  const windowIndex = windows.findIndex((windowRow) => windowRow.window_id === currentWindowId);
+  if (windowIndex >= 0) {
+    const windowRow = { ...windows[windowIndex] };
+    const existingTradeDates = Array.isArray(windowRow.trade_dates) ? [...windowRow.trade_dates] : [];
+    const tradeDateMap = new Map(existingTradeDates.map((row) => [row.trade_date, { ...row }]));
+    for (const liveRow of liveRows) {
+      if (!liveRow.trade_date) {
+        continue;
+      }
+      const existing = tradeDateMap.get(liveRow.trade_date) || { trade_date: liveRow.trade_date };
+      existing.status = liveRow.status || existing.status || "running";
+      existing.snapshot_id = liveRow.snapshot_id || existing.snapshot_id || null;
+      existing.snapshot_index = Number(liveRow.snapshot_index || existing.snapshot_index || 0);
+      existing.total_snapshots = Number(liveRow.total_snapshots || existing.total_snapshots || 0);
+      existing.snapshot_clock_code = liveRow.snapshot_clock_code || existing.snapshot_clock_code || null;
+      existing.available_minutes_since_open = liveRow.available_minutes_since_open ?? existing.available_minutes_since_open ?? null;
+      existing.progress_percent = Number(liveRow.progress_percent || existing.progress_percent || 0);
+      existing.updated_at = liveRow.updated_at || existing.updated_at || null;
+      const timing = deriveTradeDateTiming(liveRow);
+      existing.started_at = timing.startedAt;
+      existing.elapsed_seconds = timing.elapsedSeconds;
+      existing.elapsed_display = timing.elapsedDisplay;
+      existing.completed_snapshot_count = timing.completedSnapshotCount;
+      existing.avg_snapshot_seconds = timing.averageSnapshotSeconds;
+      existing.avg_snapshot_display = timing.averageSnapshotDisplay;
+      tradeDateMap.set(liveRow.trade_date, existing);
+    }
+    windowRow.trade_dates = Array.from(tradeDateMap.values()).sort((left, right) => String(left.trade_date).localeCompare(String(right.trade_date)));
+    windows[windowIndex] = windowRow;
+    progress.windows = windows;
+  }
+
+  const current = liveRows[0];
+  progress.current_trade_date = current.trade_date || progress.current_trade_date || null;
+  progress.current_snapshot_id = current.snapshot_id || progress.current_snapshot_id || null;
+  progress.current_snapshot_clock_code = current.snapshot_clock_code || progress.current_snapshot_clock_code || null;
+  return progress;
+}
+
+function deriveTradeDateTiming(liveRow) {
+  if (!liveRow?.__file_path || !fs.existsSync(liveRow.__file_path)) {
+    return {
+      startedAt: null,
+      elapsedSeconds: null,
+      elapsedDisplay: "-",
+      completedSnapshotCount: 0,
+      averageSnapshotSeconds: null,
+      averageSnapshotDisplay: "-",
+    };
+  }
+  const stats = fs.statSync(liveRow.__file_path);
+  const startedAtMs = Number(stats.birthtimeMs || stats.ctimeMs || 0);
+  if (!Number.isFinite(startedAtMs) || startedAtMs <= 0) {
+    return {
+      startedAt: null,
+      elapsedSeconds: null,
+      elapsedDisplay: "-",
+      completedSnapshotCount: 0,
+      averageSnapshotSeconds: null,
+      averageSnapshotDisplay: "-",
+    };
+  }
+  const nowMs = Date.now();
+  const elapsedSeconds = Math.max(0, (nowMs - startedAtMs) / 1000);
+  const snapshotIndex = Number(liveRow.snapshot_index || 0);
+  const isCompleted = ["trade_date_completed", "completed"].includes(String(liveRow.status || ""));
+  const completedSnapshotCount = isCompleted ? snapshotIndex : Math.max(0, snapshotIndex - 1);
+  const averageSnapshotSeconds = completedSnapshotCount > 0
+    ? elapsedSeconds / completedSnapshotCount
+    : null;
+  return {
+    startedAt: new Date(startedAtMs).toISOString(),
+    elapsedSeconds,
+    elapsedDisplay: formatDurationCompact(elapsedSeconds),
+    completedSnapshotCount,
+    averageSnapshotSeconds,
+    averageSnapshotDisplay: averageSnapshotSeconds == null ? "-" : formatDurationCompact(averageSnapshotSeconds),
+  };
 }
 
 function readLogTail(maxLines = 200) {
@@ -108,10 +237,40 @@ function readLogTail(maxLines = 200) {
 }
 
 function buildProgressSnapshot() {
+  const progress = readProgressPayload();
   return {
-    progress: readProgressPayload(),
-    logs: readLogTail(),
+    progress,
+    logs: buildDetailedLogTail(progress),
   };
+}
+
+function buildDetailedLogTail(progress) {
+  const liveLines = buildLiveProgressLines(progress);
+  const persistedLines = readLogTail(160);
+  return [...liveLines, ...persistedLines].slice(-200);
+}
+
+function buildLiveProgressLines(progress) {
+  const windows = Array.isArray(progress?.windows) ? progress.windows : [];
+  const lines = [];
+  for (const windowRow of windows) {
+    const tradeDates = Array.isArray(windowRow.trade_dates) ? windowRow.trade_dates : [];
+    for (const tradeDateRow of tradeDates) {
+      if (!tradeDateRow.started_at) {
+        continue;
+      }
+      lines.push(
+        `[live] ${windowRow.window_id || "-"} ${tradeDateRow.trade_date || "-"} `
+        + `status=${tradeDateRow.status || "running"} `
+        + `snapshot=${tradeDateRow.snapshot_index || 0}/${tradeDateRow.total_snapshots || 0} `
+        + `clock=${tradeDateRow.snapshot_clock_code || "-"} `
+        + `elapsed=${tradeDateRow.elapsed_display || "-"} `
+        + `avg_snapshot=${tradeDateRow.avg_snapshot_display || "-"} `
+        + `updated=${tradeDateRow.updated_at || "-"}`
+      );
+    }
+  }
+  return lines;
 }
 
 function resolveExistingWatchPath(targetPath) {
@@ -269,11 +428,13 @@ function getProgressPageHtml() {
     <div class="wrap">
       <section class="hero">
         <h1 class="title">StockNetV2 Qualification Progress</h1>
-        <p class="subtitle">Three-month research run progress with server-sent updates. No browser polling.</p>
+        <p class="subtitle">Long-horizon research run progress with live per-date snapshot updates. No browser polling.</p>
         <div class="progress-track"><div id="progressFill" class="progress-fill"></div></div>
         <div class="meta-grid">
           <div class="card"><div class="card-label">Status</div><div id="statusValue" class="card-value">idle</div></div>
           <div class="card"><div class="card-label">Current Window</div><div id="windowValue" class="card-value">-</div></div>
+          <div class="card"><div class="card-label">Current Trade Date</div><div id="tradeDateCurrentValue" class="card-value">-</div></div>
+          <div class="card"><div class="card-label">Current Snapshot</div><div id="snapshotCurrentValue" class="card-value">-</div></div>
           <div class="card"><div class="card-label">Current Stage</div><div id="stageValue" class="card-value">-</div></div>
           <div class="card"><div class="card-label">Trade Dates</div><div id="tradeDateValue" class="card-value">0 / 0</div></div>
           <div class="card"><div class="card-label">Windows</div><div id="windowCountValue" class="card-value">0 / 0</div></div>
@@ -305,6 +466,8 @@ function getProgressPageHtml() {
       const progressFill = document.getElementById("progressFill");
       const statusValue = document.getElementById("statusValue");
       const windowValue = document.getElementById("windowValue");
+      const tradeDateCurrentValue = document.getElementById("tradeDateCurrentValue");
+      const snapshotCurrentValue = document.getElementById("snapshotCurrentValue");
       const stageValue = document.getElementById("stageValue");
       const tradeDateValue = document.getElementById("tradeDateValue");
       const windowCountValue = document.getElementById("windowCountValue");
@@ -329,6 +492,8 @@ function getProgressPageHtml() {
         progressFill.style.width = percent.toFixed(2) + "%";
         statusValue.textContent = progress.status || "idle";
         windowValue.textContent = progress.current_window_id || "-";
+        tradeDateCurrentValue.textContent = progress.current_trade_date || "-";
+        snapshotCurrentValue.textContent = progress.current_snapshot_clock_code || "-";
         stageValue.textContent = progress.current_stage || "-";
         tradeDateValue.textContent = completedTradeDates + " / " + totalTradeDates;
         windowCountValue.textContent = completedWindows + " / " + totalWindows;
@@ -343,9 +508,24 @@ function getProgressPageHtml() {
           const stage = windowItem.status || "pending";
           const dates = windowItem.completed_trade_dates || 0;
           const total = windowItem.total_trade_dates || 0;
+          const tradeDates = Array.isArray(windowItem.trade_dates) ? windowItem.trade_dates : [];
+          const tradeDateRows = tradeDates.map((tradeDate) => {
+            const percent = Number(tradeDate.progress_percent || 0);
+            const snapshotClock = tradeDate.snapshot_clock_code || "-";
+            const snapshotIndex = Number(tradeDate.snapshot_index || 0);
+            const totalSnapshots = Number(tradeDate.total_snapshots || 0);
+            const elapsedDisplay = tradeDate.elapsed_display || "-";
+            const avgSnapshotDisplay = tradeDate.avg_snapshot_display || "-";
+            return '<div class="window-row" style="margin-top:8px;">' +
+              '<div class="window-name">' + (tradeDate.trade_date || '-') + '</div>' +
+              '<div class="window-meta">status=' + (tradeDate.status || 'pending') + ' | snapshot=' + snapshotIndex + '/' + totalSnapshots + ' | clock=' + snapshotClock + ' | elapsed=' + elapsedDisplay + ' | avg_snapshot=' + avgSnapshotDisplay + '</div>' +
+              '<div class="progress-track" style="height:10px; margin-top:8px;"><div class="progress-fill" style="width:' + percent.toFixed(2) + '%;"></div></div>' +
+            '</div>';
+          }).join("");
           return '<div class="window-row">' +
             '<div class="window-name">' + label + '</div>' +
             '<div class="window-meta">status=' + stage + ' | trade_dates=' + dates + '/' + total + '</div>' +
+            tradeDateRows +
           '</div>';
         }).join("");
         const artifacts = Array.isArray(progress.recent_artifacts) ? progress.recent_artifacts : [];
@@ -392,16 +572,26 @@ function openProgressStream(req, res) {
   };
   emit();
   const watchTargets = [...new Set(
-    [getProgressFilePath(), getLogFilePath()]
+    [path.dirname(getProgressFilePath()), getLogFilePath()]
       .map((target) => resolveExistingWatchPath(target))
       .filter(Boolean),
   )];
-  const watchers = watchTargets.map((target) => fs.watch(target, () => emit()));
+  const watchers = watchTargets.map((target) => {
+    try {
+      return fs.watch(target, { recursive: true }, () => emit());
+    } catch {
+      return fs.watch(target, () => emit());
+    }
+  });
   const keepAlive = setInterval(() => {
     res.write(": keep-alive\n\n");
   }, 15000);
+  const emitInterval = setInterval(() => {
+    emit();
+  }, 1000);
   req.on("close", () => {
     clearInterval(keepAlive);
+    clearInterval(emitInterval);
     for (const watcher of watchers) {
       watcher.close();
     }

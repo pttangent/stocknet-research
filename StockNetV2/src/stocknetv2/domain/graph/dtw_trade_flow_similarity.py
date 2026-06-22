@@ -25,16 +25,27 @@ def build_dtw_trade_flow_similarity_edges(
     reciprocal_top_k: int | None = None,
     degree_cap: int | None = None,
     min_overlap_points: int = 8,
+    min_overlap_floor_points: int = 5,
     min_variance: float = 1e-8,
+    warmup_min_minutes: int = 5,
+    max_lookback_minutes: int = 30,
     backend: str = "cpu_python",
     torch_device: str = "auto",
     torch_batch_pair_threshold: int = 1024,
 ) -> list[GraphEdge]:
-    window_info = compute_effective_dtw_window(snapshot_time=snapshot_time, session_open=session_open)
+    window_info = compute_effective_dtw_window(
+        snapshot_time=snapshot_time,
+        session_open=session_open,
+        min_minutes=warmup_min_minutes,
+        max_minutes=max_lookback_minutes,
+        target_min_overlap_points=min_overlap_points,
+        min_overlap_floor_points=min_overlap_floor_points,
+    )
     if not window_info["enabled"]:
         return []
 
     minutes = int(window_info["effective_lookback_minutes"])
+    effective_min_overlap_points = int(window_info["effective_min_overlap_points"])
     flow_matrix = _build_matrix(
         features_1m,
         value_column="flow_impulse_score",
@@ -59,9 +70,9 @@ def build_dtw_trade_flow_similarity_edges(
 
     symbols = sorted({str(symbol) for matrix in matrices for symbol in matrix.columns})
     coarse_matrix = (
-        0.50 * _coarse_similarity_matrix(flow_matrix, symbols, min_overlap_points, min_variance)
-        + 0.30 * _coarse_similarity_matrix(imbalance_matrix, symbols, min_overlap_points, min_variance)
-        + 0.20 * _coarse_similarity_matrix(large_trade_matrix, symbols, min_overlap_points, min_variance)
+        0.50 * _coarse_similarity_matrix(flow_matrix, symbols, effective_min_overlap_points, min_variance)
+        + 0.30 * _coarse_similarity_matrix(imbalance_matrix, symbols, effective_min_overlap_points, min_variance)
+        + 0.20 * _coarse_similarity_matrix(large_trade_matrix, symbols, effective_min_overlap_points, min_variance)
     )
 
     pair_component_records: list[dict[str, object]] = []
@@ -80,13 +91,13 @@ def build_dtw_trade_flow_similarity_edges(
             flow_matrix=flow_matrix,
             imbalance_matrix=imbalance_matrix,
             large_trade_matrix=large_trade_matrix,
-            min_overlap_points=min_overlap_points,
+            min_overlap_points=effective_min_overlap_points,
             min_variance=min_variance,
             backend=backend,
             torch_device=torch_device,
             torch_batch_pair_threshold=torch_batch_pair_threshold,
         )
-        if component_count < 2 or support_points < min_overlap_points or score < min_similarity:
+        if component_count < 2 or support_points < effective_min_overlap_points or score < min_similarity:
             continue
         pair_component_records.append(
             {
@@ -111,6 +122,7 @@ def build_dtw_trade_flow_similarity_edges(
                 support_points=int(record["support_points"]),
                 edge_confidence=float(window_info["window_confidence"]),
                 effective_lookback_minutes=minutes,
+                calculation_backend=_backend_label(backend, torch_device),
             )
         )
     return keep_top_k_per_symbol(
@@ -227,3 +239,7 @@ def _coarse_similarity_matrix(
         min_periods=min_overlap_points,
         min_variance=min_variance,
     )
+
+
+def _backend_label(backend: str, torch_device: str) -> str:
+    return f"{backend}:{torch_device}"

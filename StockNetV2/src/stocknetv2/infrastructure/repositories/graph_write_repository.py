@@ -5,6 +5,7 @@ import json
 import duckdb
 import pandas as pd
 
+from stocknetv2.application.services.temporal_edge_replay_service import TemporalEdgeState
 from stocknetv2.domain.community.community import Community
 from stocknetv2.domain.graph.edge import GraphEdge
 
@@ -35,6 +36,13 @@ class GraphWriteRepository:
                 layer_name=layer_name,
                 edges=edges,
             )
+            self._write_relation_observations(
+                run_id=run_id,
+                snapshot_id=snapshot_id,
+                trade_date=trade_date,
+                snapshot_time=snapshot_time,
+                edges=edges,
+            )
             self._write_edges(
                 run_id=run_id,
                 snapshot_id=snapshot_id,
@@ -59,6 +67,41 @@ class GraphWriteRepository:
                 communities=layer_communities.get(layer_name, []),
                 edges=edges,
                 universe_symbol_count=universe_symbol_count,
+            )
+
+    def save_temporal_edge_states(self, *, records: list[TemporalEdgeState]) -> None:
+        for record in records:
+            self._connection.execute(
+                """
+                INSERT INTO temporal_edge_state (
+                    temporal_edge_state_id, relation_observation_id, run_id, snapshot_id, trade_date, timestamp,
+                    graph_layer, source_symbol, target_symbol, raw_score, temporal_score, support_points,
+                    effective_lookback_minutes, presence_count, age_frames, missing_frames, entered_at,
+                    last_seen_at, state, temporal_policy_id
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                [
+                    record.temporal_edge_state_id,
+                    record.relation_observation_id,
+                    record.run_id,
+                    record.snapshot_id,
+                    record.trade_date,
+                    record.timestamp,
+                    record.graph_layer,
+                    record.source_symbol,
+                    record.target_symbol,
+                    record.raw_score,
+                    record.temporal_score,
+                    record.support_points,
+                    record.effective_lookback_minutes,
+                    record.presence_count,
+                    record.age_frames,
+                    record.missing_frames,
+                    record.entered_at,
+                    record.last_seen_at,
+                    record.state,
+                    record.temporal_policy_id,
+                ],
             )
 
     def _write_edge_summary(
@@ -131,6 +174,46 @@ class GraphWriteRepository:
                     snapshot_time,
                     edge.support_points,
                     config_id,
+                ],
+            )
+
+    def _write_relation_observations(
+        self,
+        *,
+        run_id: str,
+        snapshot_id: str,
+        trade_date: str,
+        snapshot_time: pd.Timestamp,
+        edges: list[GraphEdge],
+    ) -> None:
+        for edge in edges:
+            self._connection.execute(
+                """
+                INSERT INTO relation_observation (
+                    relation_observation_id, run_id, snapshot_id, trade_date, timestamp, graph_layer,
+                    relation_type, source_symbol, target_symbol, raw_score, edge_weight, edge_confidence,
+                    calculation_backend, support_points, effective_lookback_minutes, window_start, window_end, temporal_policy_id
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                [
+                    _relation_observation_id(snapshot_id, edge.graph_layer, edge.source_symbol, edge.target_symbol),
+                    run_id,
+                    snapshot_id,
+                    trade_date,
+                    snapshot_time,
+                    edge.graph_layer,
+                    edge.edge_type,
+                    edge.source_symbol,
+                    edge.target_symbol,
+                    edge.raw_score,
+                    edge.weight,
+                    edge.edge_confidence,
+                    edge.calculation_backend,
+                    edge.support_points,
+                    edge.effective_lookback_minutes,
+                    None,
+                    snapshot_time,
+                    "raw_snapshot_v1",
                 ],
             )
 
@@ -282,3 +365,7 @@ def _build_degree_counts(edges: list[GraphEdge]) -> dict[str, int]:
         degrees[edge.source_symbol] = degrees.get(edge.source_symbol, 0) + 1
         degrees[edge.target_symbol] = degrees.get(edge.target_symbol, 0) + 1
     return degrees
+
+
+def _relation_observation_id(snapshot_id: str, graph_layer: str, source_symbol: str, target_symbol: str) -> str:
+    return f"{snapshot_id}_{graph_layer}_{source_symbol}_{target_symbol}"

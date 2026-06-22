@@ -98,6 +98,28 @@ TABLE_SCHEMAS: dict[str, str] = {
             PRIMARY KEY (snapshot_id, graph_layer)
         )
     """,
+    "relation_observation": """
+        CREATE TABLE IF NOT EXISTS relation_observation (
+            relation_observation_id TEXT PRIMARY KEY,
+            run_id TEXT NOT NULL,
+            snapshot_id TEXT NOT NULL,
+            trade_date DATE NOT NULL,
+            timestamp TIMESTAMP NOT NULL,
+            graph_layer TEXT NOT NULL,
+            relation_type TEXT NOT NULL,
+            source_symbol TEXT NOT NULL,
+            target_symbol TEXT NOT NULL,
+            raw_score DOUBLE,
+            edge_weight DOUBLE,
+            edge_confidence DOUBLE,
+            calculation_backend TEXT,
+            support_points INTEGER,
+            effective_lookback_minutes INTEGER,
+            window_start TIMESTAMP,
+            window_end TIMESTAMP,
+            temporal_policy_id TEXT
+        )
+    """,
     "graph_edges_thresholded": """
         CREATE TABLE IF NOT EXISTS graph_edges_thresholded (
             run_id TEXT NOT NULL,
@@ -117,6 +139,30 @@ TABLE_SCHEMAS: dict[str, str] = {
             support_points INTEGER,
             config_id TEXT,
             PRIMARY KEY (snapshot_id, graph_layer, source_symbol, target_symbol)
+        )
+    """,
+    "temporal_edge_state": """
+        CREATE TABLE IF NOT EXISTS temporal_edge_state (
+            temporal_edge_state_id TEXT PRIMARY KEY,
+            relation_observation_id TEXT,
+            run_id TEXT NOT NULL,
+            snapshot_id TEXT NOT NULL,
+            trade_date DATE NOT NULL,
+            timestamp TIMESTAMP NOT NULL,
+            graph_layer TEXT NOT NULL,
+            source_symbol TEXT NOT NULL,
+            target_symbol TEXT NOT NULL,
+            raw_score DOUBLE,
+            temporal_score DOUBLE,
+            support_points INTEGER,
+            effective_lookback_minutes INTEGER,
+            presence_count INTEGER,
+            age_frames INTEGER,
+            missing_frames INTEGER,
+            entered_at TIMESTAMP,
+            last_seen_at TIMESTAMP,
+            state TEXT NOT NULL,
+            temporal_policy_id TEXT NOT NULL
         )
     """,
     "layer_community": """

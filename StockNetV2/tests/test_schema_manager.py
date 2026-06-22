@@ -25,7 +25,9 @@ def test_schema_manager_creates_required_t1_tables(tmp_path):
         "graph_snapshot",
         "graph_edge_summary",
         "graph_layer_diagnostic",
+        "relation_observation",
         "graph_edges_thresholded",
+        "temporal_edge_state",
         "layer_community",
         "layer_community_membership",
         "consensus_theme_candidate",
@@ -81,3 +83,17 @@ def test_schema_manager_creates_membership_and_lineage_support_tables(tmp_path):
 
     config_columns = _column_names(connection, "config_registry")
     assert {"config_id", "config_name", "config_json", "config_version"}.issubset(config_columns)
+
+    relation_columns = _column_names(connection, "relation_observation")
+    assert {
+        "relation_observation_id",
+        "raw_score",
+        "support_points",
+        "temporal_policy_id",
+        "calculation_backend",
+    }.issubset(relation_columns)
+
+    temporal_columns = _column_names(connection, "temporal_edge_state")
+    assert {"temporal_edge_state_id", "temporal_score", "presence_count", "missing_frames", "state"}.issubset(
+        temporal_columns
+    )

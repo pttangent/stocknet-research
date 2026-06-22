@@ -11,6 +11,11 @@ from stocknetv2.domain.graph.series_utils import (
     compute_pairwise_correlation_matrix,
     select_topk_pair_indices,
 )
+from stocknetv2.domain.graph.torch_graph_backend import (
+    compute_flow_alignment_metrics_torch,
+    resolve_graph_backend,
+    resolve_graph_torch_device,
+)
 
 FLOW_ALIGNMENT_LOOKBACK_MINUTES = 60
 
@@ -27,6 +32,8 @@ def build_flow_alignment_edges(
     min_joint_active_points: int = 1,
     activity_epsilon: float = 0.0,
     min_variance: float = 0.0,
+    backend: str = "cpu_numpy",
+    torch_device: str = "auto",
 ) -> list[GraphEdge]:
     signed_flow_matrix = _build_signed_flow_matrix(
         features_1m,
@@ -36,19 +43,31 @@ def build_flow_alignment_edges(
     if signed_flow_matrix.empty:
         return []
 
-    correlation_matrix = compute_pairwise_correlation_matrix(
-        signed_flow_matrix,
-        min_periods=max(2, min_joint_active_points),
-        min_variance=min_variance,
-    )
-    same_direction_matrix = compute_conditional_same_direction_ratio(
-        signed_flow_matrix,
-        epsilon=activity_epsilon,
-    )
-    joint_active_counts = compute_joint_active_counts(
-        signed_flow_matrix,
-        epsilon=activity_epsilon,
-    )
+    effective_backend = resolve_graph_backend(requested_backend=backend, torch_device=torch_device)
+    if effective_backend == "cpu_numpy":
+        correlation_matrix = compute_pairwise_correlation_matrix(
+            signed_flow_matrix,
+            min_periods=max(2, min_joint_active_points),
+            min_variance=min_variance,
+        )
+        same_direction_matrix = compute_conditional_same_direction_ratio(
+            signed_flow_matrix,
+            epsilon=activity_epsilon,
+        )
+        joint_active_counts = compute_joint_active_counts(
+            signed_flow_matrix,
+            epsilon=activity_epsilon,
+        )
+        calculation_backend = "cpu_numpy_v1"
+    else:
+        correlation_matrix, same_direction_matrix, joint_active_counts = compute_flow_alignment_metrics_torch(
+            signed_flow_matrix,
+            epsilon=activity_epsilon,
+            min_periods=max(2, min_joint_active_points),
+            min_variance=min_variance,
+            device=resolve_graph_torch_device(effective_backend=effective_backend, torch_device=torch_device),
+        )
+        calculation_backend = f"{effective_backend}_v1"
     score_matrix = 0.6 * correlation_matrix + 0.4 * same_direction_matrix
     score_matrix = np.where(joint_active_counts >= min_joint_active_points, score_matrix, 0.0)
     symbols = signed_flow_matrix.columns.tolist()
@@ -72,6 +91,7 @@ def build_flow_alignment_edges(
                 weight=score,
                 raw_score=score,
                 support_points=int(joint_active_counts[left_index, right_index]),
+                calculation_backend=calculation_backend,
             )
         )
     return edges

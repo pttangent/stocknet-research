@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import argparse
 import os
-from dataclasses import replace
 from pathlib import Path
 
 import duckdb
@@ -16,10 +15,11 @@ from stocknetv2.application.services.layer_execution_service import LayerExecuti
 from stocknetv2.application.services.lifecycle_service import LifecycleService
 from stocknetv2.application.services.read_model_service import ReadModelService
 from stocknetv2.application.services.semantic_service import SemanticService
+from stocknetv2.application.services.temporal_edge_replay_service import TemporalEdgeReplayService
 from stocknetv2.application.services.theme_flow_service import ThemeFlowService
 from stocknetv2.application.services.theme_quality_service import ThemeQualityService
 from stocknetv2.domain.snapshot.snapshot_clock import SnapshotClock
-from stocknetv2.domain.graph.layer_config import ThemeDiscoverySettings
+from stocknetv2.domain.graph.layer_config import ThemeDiscoverySettings, build_theme_discovery_settings
 from stocknetv2.infrastructure.db.schema_manager import SchemaManager
 from stocknetv2.infrastructure.repositories.audit_repository import AuditRepository
 from stocknetv2.infrastructure.repositories.graph_write_repository import GraphWriteRepository
@@ -49,25 +49,21 @@ def run_theme_discovery(
     config_version: str,
     code_commit: str,
     layer_workers: int = 1,
+    graph_backend: str = "cpu_numpy",
+    graph_torch_device: str = "auto",
     dtw_backend: str = "cpu_python",
     dtw_torch_device: str = "auto",
     dtw_torch_batch_pair_threshold: int = 1024,
+    progress_callback=None,
 ):
     resolved_database_path = Path(database_path).expanduser().resolve()
     resolved_database_path.parent.mkdir(parents=True, exist_ok=True)
-    discovery_settings = ThemeDiscoverySettings(
-        dtw_return=replace(
-            ThemeDiscoverySettings().dtw_return,
-            backend=dtw_backend,
-            torch_device=dtw_torch_device,
-            torch_batch_pair_threshold=max(1, dtw_torch_batch_pair_threshold),
-        ),
-        dtw_trade_flow=replace(
-            ThemeDiscoverySettings().dtw_trade_flow,
-            backend=dtw_backend,
-            torch_device=dtw_torch_device,
-            torch_batch_pair_threshold=max(1, dtw_torch_batch_pair_threshold),
-        ),
+    discovery_settings = build_theme_discovery_settings(
+        graph_backend=graph_backend,
+        graph_torch_device=graph_torch_device,
+        dtw_backend=dtw_backend,
+        dtw_torch_device=dtw_torch_device,
+        dtw_torch_batch_pair_threshold=dtw_torch_batch_pair_threshold,
     )
 
     market_source = _build_market_source(
@@ -94,6 +90,7 @@ def run_theme_discovery(
             theme_write_repository=ThemeWriteRepository(connection),
             semantic_service=SemanticService(),
             lifecycle_service=LifecycleService(),
+            temporal_edge_replay_service=TemporalEdgeReplayService(),
             theme_quality_service=ThemeQualityService(),
             theme_flow_service=ThemeFlowService(),
             read_model_service=ReadModelService(),
@@ -112,7 +109,7 @@ def run_theme_discovery(
             graph_build_only=graph_build_only,
             discovery_settings=discovery_settings.to_dict(),
         )
-        return orchestrator.run(config)
+        return orchestrator.run(config, progress_callback=progress_callback)
     finally:
         connection.close()
 
@@ -135,6 +132,18 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--config-version", required=True)
     parser.add_argument("--code-commit", required=True)
     parser.add_argument("--layer-workers", type=int, help="Process workers for per-snapshot layer builds.")
+    parser.add_argument(
+        "--graph-backend",
+        default="cpu_numpy",
+        choices=("cpu_numpy", "torch_cpu", "torch_cuda", "torch_auto"),
+        help="Execution backend for return_corr/flow/activity graph layers.",
+    )
+    parser.add_argument(
+        "--graph-torch-device",
+        default="auto",
+        choices=("auto", "cpu", "cuda"),
+        help="Preferred torch device when a torch graph backend is used.",
+    )
     parser.add_argument(
         "--dtw-backend",
         default="cpu_python",
@@ -174,6 +183,8 @@ def main() -> int:
         config_version=args.config_version,
         code_commit=args.code_commit,
         layer_workers=args.layer_workers or _default_layer_workers(graph_build_only=args.graph_build_only),
+        graph_backend=args.graph_backend,
+        graph_torch_device=args.graph_torch_device,
         dtw_backend=args.dtw_backend,
         dtw_torch_device=args.dtw_torch_device,
         dtw_torch_batch_pair_threshold=args.dtw_torch_batch_pair_threshold,

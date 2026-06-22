@@ -12,14 +12,17 @@ def test_dtw_window_disables_before_minimum_lookback():
     result = compute_effective_dtw_window(
         snapshot_time=snapshot_time,
         session_open=session_open,
-        min_minutes=10,
+        min_minutes=5,
         max_minutes=30,
+        target_min_overlap_points=8,
+        min_overlap_floor_points=5,
     )
 
-    assert result["enabled"] is False
+    assert result["enabled"] is True
     assert result["effective_lookback_minutes"] == 5
     assert result["dtw_mode"] == "warmup"
-    assert result["window_confidence"] == 0.0
+    assert result["effective_min_overlap_points"] == 5
+    assert result["window_confidence"] > 0.0
 
 
 def test_dtw_window_scales_confidence_until_maximum_lookback():
@@ -29,14 +32,17 @@ def test_dtw_window_scales_confidence_until_maximum_lookback():
     result = compute_effective_dtw_window(
         snapshot_time=snapshot_time,
         session_open=session_open,
-        min_minutes=10,
+        min_minutes=5,
         max_minutes=30,
+        target_min_overlap_points=8,
+        min_overlap_floor_points=5,
     )
 
     assert result["enabled"] is True
     assert result["effective_lookback_minutes"] == 20
     assert result["dtw_mode"] == "early"
-    assert result["window_confidence"] == 0.75
+    assert result["effective_min_overlap_points"] == 8
+    assert result["window_confidence"] > 0.5
 
 
 def test_dtw_window_reaches_full_mode_after_maximum_lookback():
@@ -46,11 +52,14 @@ def test_dtw_window_reaches_full_mode_after_maximum_lookback():
     result = compute_effective_dtw_window(
         snapshot_time=snapshot_time,
         session_open=session_open,
-        min_minutes=10,
+        min_minutes=5,
         max_minutes=30,
+        target_min_overlap_points=8,
+        min_overlap_floor_points=5,
     )
 
     assert result["enabled"] is True
     assert result["effective_lookback_minutes"] == 30
     assert result["dtw_mode"] == "full"
+    assert result["effective_min_overlap_points"] == 8
     assert result["window_confidence"] == 1.0

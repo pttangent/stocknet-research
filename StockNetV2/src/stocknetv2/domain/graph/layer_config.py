@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, replace
 
 
 @dataclass(frozen=True)
@@ -15,6 +15,8 @@ class ReturnCorrelationConfig:
     min_correlation: float = 0.70
     min_overlap_points: int = 8
     lookback_bars: int = 12
+    backend: str = "cpu_numpy"
+    torch_device: str = "auto"
     filter: LayerFilterConfig = field(default_factory=LayerFilterConfig)
 
 
@@ -25,6 +27,8 @@ class FlowAlignmentConfig:
     min_joint_active_points: int = 8
     activity_epsilon: float = 0.05
     min_variance: float = 1e-8
+    backend: str = "cpu_numpy"
+    torch_device: str = "auto"
     filter: LayerFilterConfig = field(default_factory=LayerFilterConfig)
 
 
@@ -32,7 +36,10 @@ class FlowAlignmentConfig:
 class DTWLayerConfig:
     min_similarity: float = 0.9
     min_overlap_points: int = 8
+    min_overlap_floor_points: int = 5
     min_variance: float = 1e-8
+    warmup_min_minutes: int = 5
+    max_lookback_minutes: int = 30
     backend: str = "cpu_python"
     torch_device: str = "auto"
     torch_batch_pair_threshold: int = 1024
@@ -43,6 +50,8 @@ class DTWLayerConfig:
 class ActivityLayerConfig:
     min_score: float = 0.8
     threshold: float = 1.5
+    backend: str = "cpu_numpy"
+    torch_device: str = "auto"
     filter: LayerFilterConfig = field(default_factory=LayerFilterConfig)
 
 
@@ -100,3 +109,48 @@ class ThemeDiscoverySettings:
 
     def to_dict(self) -> dict[str, object]:
         return asdict(self)
+
+
+def build_theme_discovery_settings(
+    *,
+    graph_backend: str,
+    graph_torch_device: str,
+    dtw_backend: str,
+    dtw_torch_device: str,
+    dtw_torch_batch_pair_threshold: int,
+) -> ThemeDiscoverySettings:
+    base_settings = ThemeDiscoverySettings()
+    return ThemeDiscoverySettings(
+        return_corr=replace(
+            base_settings.return_corr,
+            backend=graph_backend,
+            torch_device=graph_torch_device,
+        ),
+        flow_alignment=replace(
+            base_settings.flow_alignment,
+            backend=graph_backend,
+            torch_device=graph_torch_device,
+        ),
+        volume_expansion=replace(
+            base_settings.volume_expansion,
+            backend=graph_backend,
+            torch_device=graph_torch_device,
+        ),
+        large_trade_alignment=replace(
+            base_settings.large_trade_alignment,
+            backend=graph_backend,
+            torch_device=graph_torch_device,
+        ),
+        dtw_return=replace(
+            base_settings.dtw_return,
+            backend=dtw_backend,
+            torch_device=dtw_torch_device,
+            torch_batch_pair_threshold=max(1, dtw_torch_batch_pair_threshold),
+        ),
+        dtw_trade_flow=replace(
+            base_settings.dtw_trade_flow,
+            backend=dtw_backend,
+            torch_device=dtw_torch_device,
+            torch_batch_pair_threshold=max(1, dtw_torch_batch_pair_threshold),
+        ),
+    )

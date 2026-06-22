@@ -5,6 +5,11 @@ import pandas as pd
 
 from stocknetv2.domain.graph.edge import GraphEdge
 from stocknetv2.domain.graph.series_utils import compute_overlap_counts, select_topk_pair_indices
+from stocknetv2.domain.graph.torch_graph_backend import (
+    compute_pairwise_correlation_metrics_torch,
+    resolve_graph_backend,
+    resolve_graph_torch_device,
+)
 
 
 def build_return_corr_edges(
@@ -16,13 +21,27 @@ def build_return_corr_edges(
     reciprocal_top_k: int | None = None,
     degree_cap: int | None = None,
     min_overlap_points: int = 2,
+    backend: str = "cpu_numpy",
+    torch_device: str = "auto",
 ) -> list[GraphEdge]:
     baseline = return_window.median(axis=1) if return_window.shape[1] >= 10 else return_window.mean(axis=1)
     residual_window = return_window.sub(baseline, axis=0)
     working_window = _prefer_residual_returns(raw_window=return_window, residual_window=residual_window)
-    overlap_counts = compute_overlap_counts(working_window)
-    correlation = working_window.corr(min_periods=min_overlap_points).fillna(0.0)
-    score_matrix = correlation.to_numpy(dtype=float, copy=True)
+    effective_backend = resolve_graph_backend(requested_backend=backend, torch_device=torch_device)
+    if effective_backend == "cpu_numpy":
+        overlap_counts = compute_overlap_counts(working_window)
+        correlation = working_window.corr(min_periods=min_overlap_points).fillna(0.0)
+        score_matrix = correlation.to_numpy(dtype=float, copy=True)
+        calculation_backend = "cpu_numpy_v1"
+    else:
+        score_matrix, overlap_counts = compute_pairwise_correlation_metrics_torch(
+            working_window,
+            min_periods=min_overlap_points,
+            min_variance=1e-12,
+            device=resolve_graph_torch_device(effective_backend=effective_backend, torch_device=torch_device),
+        )
+        correlation = pd.DataFrame(score_matrix, index=working_window.columns, columns=working_window.columns)
+        calculation_backend = f"{effective_backend}_v1"
     np.fill_diagonal(score_matrix, -np.inf)
     score_matrix = np.where(overlap_counts >= min_overlap_points, score_matrix, -np.inf)
     symbols = correlation.columns.tolist()
@@ -46,6 +65,7 @@ def build_return_corr_edges(
                 weight=score,
                 raw_score=score,
                 support_points=int(overlap_counts[left_index, right_index]),
+                calculation_backend=calculation_backend,
             )
         )
     return edges
